@@ -1,0 +1,111 @@
+name: P0 Audit
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "**/*.py"
+      - "**/*.yml"
+      - "**/*.yaml"
+      - "**/*.json"
+      - "**/*.yar"
+      - ".github/workflows/audit-p0.yml"
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: Run P0 audit
+        run: |
+          python - <<'PY'
+          import re, json
+          from pathlib import Path
+          BIN={".png",".jpg",".jpeg",".gif",".pdf",".zip",".tar",".gz",".tgz",".exe",".dll",".so",".db"}
+          root=Path(".").resolve()
+          files=[p for p in root.rglob("*") if p.is_file()]
+          def read(p):
+            try:
+              if p.suffix.lower() in BIN: return ""
+              return p.read_text(encoding="utf-8",errors="ignore")
+            except: return ""
+          def grep(patterns,limit=40):
+            res=[]; pats=[re.compile(x,re.I|re.M) for x in patterns]
+            for f in files:
+              if f.suffix.lower() in BIN: continue
+              t=read(f)
+              if t and all(p.search(t) for p in pats):
+                res.append(str(f)); 
+                if len(res)>=limit: break
+            return res
+          CHECKS={
+            "Agent":[
+              ("collect_tail","File tail/syslog/journald 수집", [r"tail|journalctl|syslog|systemd\-journald|inotify|fluent|vector"]),
+              ("masking","민감정보 마스킹/정규식/토큰화", [r"mask|redact|sanitize|anonym|tokeni|hash"]),
+              ("aes_gcm_selective","중요 필드만 선택 AES\-GCM", [r"AES\-?GCM|cryptography\.hazmat|aead|Fernet"]),
+              ("tls13_outbound","TLS1\.3(서버 인증)+토큰 전송", [r"https?://", r"Authorization:\s*Bearer|bearer|jwt|oauth2|token"]),
+              ("retry_queue","재전송 큐/백오프/보관", [r"retry|backoff|queue|persist|buffer|batch"]),
+              ("policy_pull_merge","서명 정책 Pull, global<client<host 병합", [r"policy|signature|verify|merge.*(global|client|host)"]),
+              ("rules_reload_cmd","RULES_RELOAD 원격 명령", [r"RULES_RELOAD|rules_reload|reload.*rule"]),
+            ],
+            "Backend":[
+              ("fastapi_app","FastAPI 앱/엔드포인트", [r"from\s+fastapi|FastAPI\("]),
+              ("ingest_endpoint","/ingest/logs 엔드포인트", [r"@app\.(post|get|put|patch)\(\"/ingest/logs"]),
+              ("auth_token","/auth/register|token|Bearer 검증", [r"/auth/register|Authorization: Bearer|bearer|oauth2|jwt|token"]),
+              ("idempotency_nonce","Idempotency/Nonce/Timestamp 검증", [r"Idempotency|nonce|timestamp|replay|skew"]),
+              ("normalize_enrich","ECS\-lite, GeoIP/UA 인리치", [r"ECS|ecs\-lite|geoip|user\-agent|uaparser"]),
+              ("export_json","/export.json 구현", [r"@app\.(get|post)\(\"/export\.json"]),
+              ("slack_webhook","Slack Webhook(HIL)", [r"slack|webhook|hil|approval|interactive"]),
+            ],
+            "Detect":[
+              ("yaml_rules","룰 YAML 파서/로드", [r"yaml|ruamel|safe_load|load\_rules|rules"]),
+              ("priority_merge","global<client<host 병합", [r"global.*client.*host|merge.*(global|client|host)"]),
+              ("count_window","카운트/윈도 규칙", [r"window|rolling|count|threshold|rate"]),
+              ("ml_ewma","EWMA 이상탐지", [r"EWMA|moving average|exponential weighted"]),
+              ("yara_hex","YARA/HEX 스캔", [r"yara|\.yar|hex|signature"]),
+              ("events_emit","events(severity/evidence/ATT&CK)", [r"events|attack\_mapping|evidence\_refs|severity"]),
+            ],
+            "LLM":[
+              ("external_call","외부 LLM API 호출", [r"openai|anthropic|vertexai|azure openai|llm|prompt"]),
+              ("rag_topk","RAG Top\-K 근거 주입", [r"top\-k|retriev|context|evidence|chunk|rag"]),
+              ("json_schema","incident JSON 스키마 검증", [r"jsonschema|pydantic|validate|schema.*incident"]),
+              ("hil_flow","HIL 승인 분기", [r"HIL|human\-in|approval|pending|approved|rejected"]),
+            ],
+          }
+          details={}
+          scores={}
+          total_pass=0; total_cnt=0
+          for area, items in CHECKS.items():
+            det=[]
+            passed=0
+            for key,desc,pats in items:
+              hits=grep(pats)
+              ok=bool(hits)
+              det.append({"key":key,"desc":desc,"passed":ok,"examples":hits[:5]})
+              passed+=1 if ok else 0
+            cnt=len(items); total_pass+=passed; total_cnt+=cnt
+            scores[area]={"passed":passed,"total":cnt,"score":round(100*passed/cnt,1)}
+            details[area]=det
+          overall=round(100*total_pass/total_cnt,1)
+          report={"stage1_p0_scores":scores,"stage1_p0_overall":overall,"details":details}
+          Path("trust_soc_stage1_audit.json").write_text(json.dumps(report,indent=2,ensure_ascii=False))
+          Path("trust_soc_stage1_audit.md").write_text(
+            "| Area | Passed | Total | Score(%) |\n|---|---:|---:|---:|\n"+
+            "\n".join([f"| {a} | {scores[a]['passed']} | {scores[a]['total']} | {scores[a]['score']} |" for a in ["Agent","Backend","Detect","LLM"]])+
+            f"\n| **Overall** | {total_pass} | {total_cnt} | **{overall}** |"
+          )
+          print("OVERALL:", overall, "%")
+          PY
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: trust-soc-p0-audit
+          path: |
+            trust_soc_stage1_audit.json
+            trust_soc_stage1_audit.md
+      - name: Job Summary
+        if: always()
+        run: |
+          echo "## P0 Audit Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          cat trust_soc_stage1_audit.md >> $GITHUB_STEP_SUMMARY
