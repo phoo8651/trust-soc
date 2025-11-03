@@ -1,0 +1,37 @@
+extensions:
+  file_storage:
+    directory: /var/lib/agent/queue
+
+receivers:
+  filelog:
+    include: [/var/log/nginx/access.log]
+    start_at: end
+    storage: file_storage
+
+processors:
+  batch: {}
+  memory_limiter: { check_interval: 2s, limit_mib: 120 }
+
+exporters:
+  otlphttp:
+    endpoint: http://127.0.0.1:4318   # 꼭 http:// 포함
+    logs_endpoint: /v1/logs
+    # ⬇️ queue/retry는 exporter 안에서 설정
+    sending_queue:
+      enabled: true
+      queue_size: 1024
+      num_consumers: 4
+      storage: file_storage
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 10s
+      max_elapsed_time: 0s
+
+service:
+  extensions: [file_storage]
+  pipelines:
+    logs:
+      receivers: [filelog]
+      processors: [batch, memory_limiter]
+      exporters: [otlphttp]
