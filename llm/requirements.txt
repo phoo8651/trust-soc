@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+pydantic
+faiss-cpu
+chromadb
+pytest
+requests
