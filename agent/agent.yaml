@@ -1,37 +1,106 @@
+# OpenTelemetry Collector 기반 로그 에이전트 설정
+# 구현 항목
+# - filelog 로컬 로그 수집
+# - 민감정보 마스킹/샘플링
+# - 디스크 큐 + 재시도로 안정적으로 OTLP/HTTP 서버에 전송
+# - 토큰/엔드포인트는 환경변수로 주입 (설정파일에 비밀값 X)
+
 extensions:
-  file_storage:
-    directory: /var/lib/agent/queue
+  health_check:          # /health 엔드포인트 제공 (기본 13133)
+  file_storage:          # 디스크 기반 큐 저장소 (sending_queue에서 사용)
+    directory: /var/lib/secure-log-agent/queue
 
 receivers:
   filelog:
-    include: [/var/log/nginx/access.log]
-    start_at: end
-    storage: file_storage
+    include:
+      - /var/log/nginx/access.log      # 수집 대상 로그 파일 패턴
+      # - /var/log/nginx/error.log    # 필요 시 추가
+      # - /var/log/app/*.log          # 앱 로그 등
+    start_at: end                      # 에이전트 시작 시 파일 끝에서부터 읽기
+    storage: file_storage              # 읽기 오프셋을 file_storage에 유지 (재시작 시 이어읽기)
 
 processors:
-  batch: {}
-  memory_limiter: { check_interval: 2s, limit_mib: 120 }
+  memory_limiter:
+    check_interval: 2s                 # 메모리 사용량 체크 주기
+    limit_mib: 256                     # 최대 메모리 사용량 (Collector 프로세스 기준)
+
+  batch:
+    timeout: 1s                        # 최대 1초 동안 로그 모아서 전송
+    send_batch_size: 1024              # 기본 배치 크기
+    send_batch_max_size: 2048          # 최대 배치 크기
+
+  # 민감정보/토큰/쿠키 등 마스킹용 예시
+  redaction/secret:
+    allow_all_keys: true
+    blocked_values:
+      - '(?i)password=[^& ]+'          # password=xxx
+      - '(?i)authorization:[^\r\n]+'   # Authorization: ...
+      - '(?i)set-cookie:[^\r\n]+'      # Set-Cookie: ...
+      # 필요 시 추가 패턴들...
+
+  # 간단한 변환 예시: IP 마스킹 등
+  transform/encrypt_pii:
+    error_mode: ignore
+    log_statements:
+      - context: log
+        statements:
+          # IPv4 주소를 [ip_redacted] 로 치환 (실제 AES-GCM 대신 PoC 수준)
+          - replace_pattern(body, `([0-9]{1,3}\.){3}[0-9]{1,3}`, "[ip_redacted]")
+
+  # 샘플링: 전체 중 일부만 전송하고 싶을 때 사용 (여기서는 50%)
+  probabilistic_sampler/default:
+    sampling_percentage: 50
 
 exporters:
   otlphttp:
-    endpoint: http://127.0.0.1:4318   # 꼭 http:// 포함
+    # 실제 수신 서버 주소는 환경변수로 주입:
+    # 예: https://ingest.example.com:443
+    endpoint: ${env:INGEST_ENDPOINT}
+
+    # 로그용 OTLP/HTTP 경로 (서버에서 이 경로 처리)
     logs_endpoint: /v1/logs
-    # ⬇️ queue/retry는 exporter 안에서 설정
+
+    headers:
+      # 토큰도 환경변수에서 읽음. 설정파일에 토큰을 직접 쓰지 않는다.
+      Authorization: "Bearer ${env:INGEST_TOKEN}"
+
+    # 디스크 큐 + 재시도 설정 (무손실 목표)
     sending_queue:
       enabled: true
-      queue_size: 1024
-      num_consumers: 4
-      storage: file_storage
+      num_consumers: 4                  # 병렬 소비자 수
+      queue_size: 262144                # 큐 최대 길이
+      storage: file_storage             # 위에서 정의한 file_storage 사용
+
     retry_on_failure:
       enabled: true
       initial_interval: 1s
-      max_interval: 10s
-      max_elapsed_time: 0s
+      max_interval: 30s
+      max_elapsed_time: 0s              # 0이면 무제한 재시도
+
+  # 디버그용: 수집/전송 내용을 stdout에 찍어볼 때 사용
+  debug:
+    verbosity: basic
 
 service:
-  extensions: [file_storage]
+  telemetry:
+    metrics:
+      address: 0.0.0.0:8889             # 에이전트 메트릭 포트 (curl로 상태 확인용)
+
+  # 플러그인 확장 기능 목록
+  extensions:
+    - health_check
+    - file_storage
+
+  # 실제 처리 파이프라인 정의
   pipelines:
     logs:
       receivers: [filelog]
-      processors: [batch, memory_limiter]
-      exporters: [otlphttp]
+      processors:
+        - memory_limiter
+        - redaction/secret
+        - transform/encrypt_pii
+        - probabilistic_sampler/default
+        - batch
+      exporters:
+        - otlphttp
+        - debug
