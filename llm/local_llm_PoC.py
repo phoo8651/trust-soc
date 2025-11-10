@@ -37,24 +37,21 @@ print(response["choices"][0]["text"])
 import json
 
 class DummyLocalLLM:
+    def __init__(self, model_path: str = None):
+        self.model_path = model_path
+        print(f"[DummyLocalLLM] model_path: {self.model_path}")
+        
     def generate(self, prompt: str) -> str:
-        # prompt를 받아서 JSON 문자열을 리턴 (실제 LLM 흉내)
-        fake = {
-            "summary": "Spring4Shell 의심 공격 발생",
-            "attack_mapping": ["T1190 - Exploit Public-Facing Application"],
-            "recommended_actions": ["WAF 룰 강화", "취약 버전 패치 적용"],
-            "confidence": 0.88,
-            "evidence_refs": [
-                {
-                    "type": "yara",
-                    "ref_id": "yara_001",
-                    "source": "web_log",
-                    "offset": 123,
-                    "length": 256,
-                    "sha256": "aabbccddeeff1122334455",
-                    "rule_id": "SPRING4SHELL_WEB"
-                }
-            ],
-            "hil_required": False
-        }
-        return json.dumps(fake, ensure_ascii=False)
+        return json.dumps({
+        "summary": "모의 요약",
+        "attack_mapping": ["모름"],
+        "recommended_actions": ["모름"],
+        "confidence": 0.5,
+        "evidence_refs": [{"type":"raw","ref_id":"log_001","source":"auth.log","offset":0,"length":150,"sha256":"abc123"}],
+        "hil_required": False
+    })
+
+    '''def generate(self, prompt: str) -> str:
+        # 단순히 프롬프트를 echo 하는 PoC 예시
+        return '{"summary": "모의 요약", "attack_mapping": ["모름"], "recommended_actions": ["모름"], "confidence": 0.5, "hil_required": false}'
+    '''
