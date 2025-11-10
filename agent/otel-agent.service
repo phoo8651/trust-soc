@@ -1,0 +1,23 @@
+[Unit]
+Description=Secure Log Agent (filelog -> OTLP/HTTP)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# 전용 계정을 쓰는 게 안전함 (root 금지 권장)
+User=otel-agent
+Group=otel-agent
+
+# OpenTelemetry Collector Contrib 실행 (설치 위치에 따라 경로 조정)
+ExecStart=/usr/bin/otelcol-contrib \
+  --config=/etc/secure-log-agent/agent.yaml
+
+Restart=always          # 비정상 종료 시 자동 재시작
+RestartSec=5
+
+# 환경변수(토큰/엔드포인트)는 override.conf 에서 주입 (이 파일엔 넣지 않음)
+
+[Install]
+WantedBy=multi-user.target

@@ -1,7 +1,8 @@
+# -*- coding: utf-8 -*-
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 class RegisterRequest(BaseModel):
     client_id: str
@@ -57,32 +58,10 @@ class JobPullJob(BaseModel):
     issued_at: Optional[datetime]
     expires_at: Optional[datetime]
     idempotency_key: str
-    rate_limit_per_min: Optional[int] = None
-    dry_run: bool = False
-    signature: Optional[str] = None
 
 
 class JobPullResponse(BaseModel):
     jobs: List[JobPullJob]
-
-
-class JobEnqueueRequest(BaseModel):
-    job_type: str = "RULES_RELOAD"
-    client_id: str
-    agent_id: str
-    idempotency_key: str
-    approvals_required: int = 0
-    expires_at: Optional[datetime] = None
-    args: Dict[str, Any] = Field(default_factory=dict)
-    requested_by: str
-    rate_limit_per_min: Optional[int] = None
-    dry_run: bool = False
-
-
-class JobEnqueueResponse(BaseModel):
-    job_id: str
-    status: str
-    signature: str
 
 
 class JobApprovalRequest(BaseModel):

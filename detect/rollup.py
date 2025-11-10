@@ -1,141 +1,134 @@
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# 파일 경로: trust-soc/detect/rollup.py
-
-import os
-import sys
-import logging
-import psycopg2
+"""
+feature_rollup_* 테이블에 1m/5m/1h 윈도우별 시계열·통계 피처 집계.
+ON CONFLICT → 멱등성 보장
+Late arrival 포함(각 윈도우 retention)
+"""
+import os, sys, logging, psycopg2
 from psycopg2.extras import DictCursor
 
 # ───────────────────────────────────────────────────────────
-# 환경변수 설정 (or .env 로드)
+# 환경변수
 # ───────────────────────────────────────────────────────────
-DB_HOST     = os.getenv("DB_HOST", "localhost")
-DB_PORT     = os.getenv("DB_PORT", "5432")
-DB_NAME     = os.getenv("DB_NAME", "logs_db")
-DB_USER     = os.getenv("DB_USER", "postgres")
-DB_PASS     = os.getenv("DB_PASS", "password")
+# 데이터베이스 연결 정보를 환경 변수에서 가져오거나 기본값 설정
+DB_HOST  = os.getenv("DB_HOST", "localhost")
+DB_PORT  = os.getenv("DB_PORT", "5432")
+DB_NAME  = os.getenv("DB_NAME", "logs_db")
+DB_USER  = os.getenv("DB_USER", "postgres")
+DB_PASS  = os.getenv("DB_PASS", "password")
 
 # ───────────────────────────────────────────────────────────
-# 로깅 설정
+# 로깅
 # ───────────────────────────────────────────────────────────
-logging.basicConfig(
-    level    = logging.INFO,
-    format   = "%(asctime)s %(levelname)s %(message)s",
-    handlers = [logging.StreamHandler(sys.stdout)]
-)
+# 로깅 설정: 시간, 레벨, 메시지 형식으로 INFO 레벨 이상 출력
+logging.basicConfig(level=logging.INFO,
+                    format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("rollup")
 
 # ───────────────────────────────────────────────────────────
-# 집계 윈도우 설정: suffix (테이블명), interval (time_bucket, 윈도우 크기), retention (쿼리 대상 시간 범위)
+# 윈도우 정의: (suffix, time_bucket 간격, retention)
+# retention 은 해당 윈도우 크기의 2배 이상 권장 (Late arrival 데이터 처리 위함)
 # ───────────────────────────────────────────────────────────
 WINDOWS = [
-    # 1분 윈도우: 1분 간격으로 집계, 2분 전까지의 데이터를 커버하여 Late arrival 포함
+    # (테이블 접미사, time_bucket 간격, 데이터 보존 기간)
     ("1m", "1 minute", "2 minutes"),
-    # 5분 윈도우: 5분 간격으로 집계, 10분 전까지의 데이터를 커버하여 Late arrival 포함
     ("5m", "5 minutes", "10 minutes"),
-    # 1시간 윈도우: 1시간 간격으로 집계, 2시간 전까지의 데이터를 커버하여 Late arrival 포함
     ("1h", "1 hour", "2 hours"),
 ]
 
 # ───────────────────────────────────────────────────────────
-# Rollup 파이프라인 SQL 템플릿
-# - time_bucket으로 윈도우를 정의하고,
-# - ON CONFLICT로 멱등성을 보장합니다.
+# 집계 SQL 템플릿
 # ───────────────────────────────────────────────────────────
-ROLLUP_SQL_TEMPLATE = """
+# PostgreSQL/TimescaleDB의 time_bucket 함수를 사용한 시계열 집계 SQL 템플릿
+ROLLUP_SQL = """
+-- 집계 결과를 feature_rollup_{suffix} 테이블에 삽입 (또는 업데이트)
 INSERT INTO feature_rollup_{suffix} (
-    client_id,
-    host_name,
-    source_ip,
-    window_start,
-    window_end,
+    client_id, host_name, source_ip,
+    window_start, window_end,
     event_count,
-    error4xx_ratio,
-    error5xx_ratio,
-    unique_url_count,
-    unique_user_count
+    error4xx_ratio, error5xx_ratio,
+    unique_url_count, unique_user_count
 )
 SELECT
     client_id,
     host_name,
     source_ip,
-    bucket AS window_start,
-    bucket + INTERVAL '{interval}' AS window_end,
-    COUNT(*) AS event_count,
-    -- 4xx/5xx 비율 계산: 전체 카운트로 나누어 비율 계산
+    bucket AS window_start, -- time_bucket 결과는 윈도우 시작 시간
+    bucket + INTERVAL '{interval}' AS window_end, -- 윈도우 시작 시간에 간격을 더하여 윈도우 종료 시간 계산
+    COUNT(*) AS event_count, -- 총 이벤트 수
+    -- 4xx 에러 비율 계산: 400~499 상태 코드를 1로, 아니면 0으로 세고 총 이벤트 수로 나눔
     SUM(CASE WHEN http_status BETWEEN 400 AND 499 THEN 1 ELSE 0 END)::double precision / COUNT(*) AS error4xx_ratio,
+    -- 5xx 에러 비율 계산: 500~599 상태 코드를 1로, 아니면 0으로 세고 총 이벤트 수로 나눔
     SUM(CASE WHEN http_status BETWEEN 500 AND 599 THEN 1 ELSE 0 END)::double precision / COUNT(*) AS error5xx_ratio,
-    COUNT(DISTINCT url_path)  AS unique_url_count,
-    COUNT(DISTINCT user_name) AS unique_user_count
+    COUNT(DISTINCT url_path)  AS unique_url_count, -- 고유 URL 경로 수
+    COUNT(DISTINCT user_name) AS unique_user_count -- 고유 사용자 수
 FROM (
-    SELECT
-      client_id,
-      host_name,
-      source_ip,
-      http_status,
-      url_path,
-      user_name,
-      -- time_bucket 함수를 사용하여 윈도우 시작 시각(bucket) 계산
-      time_bucket('{interval}', "@timestamp") AS bucket
-    FROM normalized_logs
-    -- 데이터 처리 범위 제한: NOW() - retention 간격 이후의 데이터를 처리 (Late arrival 포함)
-    WHERE "@timestamp" >= NOW() - INTERVAL '{retention}'
+  -- 서브 쿼리: normalized_logs 테이블에서 필요한 컬럼을 선택하고, time_bucket으로 윈도우 시작 시간(bucket)을 계산
+  SELECT
+    client_id, host_name, source_ip,
+    http_status, url_path, user_name,
+    time_bucket('{interval}', "@timestamp") AS bucket -- 지정된 간격으로 타임스탬프를 버킷팅
+  FROM normalized_logs
+  -- retention 기간 내의 데이터만 처리하여 Late arrival 데이터를 포함하고 불필요한 과거 데이터 스캔을 줄임
+  WHERE "@timestamp" >= NOW() - INTERVAL '{retention}'
 ) AS sub
-GROUP BY
-    client_id,
-    host_name,
-    source_ip,
-    bucket
--- 충돌 시 업데이트: 이미 집계된 윈도우가 있다면 덮어쓰기 (멱등성 보장)
+-- client_id, host_name, source_ip, bucket(window_start) 기준으로 그룹화하여 집계
+GROUP BY client_id, host_name, source_ip, bucket
+-- 멱등성 보장: 기본키(client_id, host_name, source_ip, window_start) 충돌 시 업데이트 수행
 ON CONFLICT (client_id, host_name, source_ip, window_start)
-DO UPDATE
-    SET
-        event_count     = EXCLUDED.event_count,
-        error4xx_ratio  = EXCLUDED.error4xx_ratio,
-        error5xx_ratio  = EXCLUDED.error5xx_ratio,
-        unique_url_count = EXCLUDED.unique_url_count,
-        unique_user_count = EXCLUDED.unique_user_count
-;
+DO UPDATE SET
+    event_count         = EXCLUDED.event_count, -- EXCLUDED는 충돌을 일으킨 INSERT 시도의 데이터를 의미
+    error4xx_ratio      = EXCLUDED.error4xx_ratio,
+    error5xx_ratio      = EXCLUDED.error5xx_ratio,
+    unique_url_count    = EXCLUDED.unique_url_count,
+    unique_user_count = EXCLUDED.unique_user_count;
 """
 
-def do_rollup(conn, suffix: str, interval: str, retention: str):
+# ───────────────────────────────────────────────────────────
+# 메인 함수
+# ───────────────────────────────────────────────────────────
+
+def do_rollup(conn, suffix, interval, retention):
     """
-    단일 윈도우(suffix, interval)에 대한 집계 수행
+    지정된 윈도우 설정으로 데이터 집계를 실행하는 함수
     """
-    # SQL 템플릿에 윈도우 및 보존 기간(retention) 값 삽입
-    sql = ROLLUP_SQL_TEMPLATE.format(suffix=suffix, interval=interval, retention=retention)
+    # SQL 템플릿에 현재 윈도우 설정을 포매팅
+    sql = ROLLUP_SQL.format(suffix=suffix, interval=interval, retention=retention)
     with conn.cursor() as cur:
         logger.info(f"[{suffix}] 집계 시작 (interval={interval}, retention={retention})")
+        # SQL 실행
         cur.execute(sql)
-        count = cur.rowcount
-        conn.commit()
-        logger.info(f"[{suffix}] 집계 완료, INSERT/UPDATE된 row 수: {count}")
-
+        # 처리된 행 수 로깅 (INSERT 또는 UPDATE된 행 수)
+        logger.info(f"[{suffix}] 집계 완료, {cur.rowcount} rows upserted")
+    # 트랜잭션 커밋
+    conn.commit()
 
 def main():
+    """
+    DB 연결 및 모든 윈도우에 대한 집계 작업을 순차적으로 실행하는 메인 함수
+    """
+    conn = None
     try:
-        conn = psycopg2.connect(
-            host     = DB_HOST,
-            port     = DB_PORT,
-            dbname   = DB_NAME,
-            user     = DB_USER,
-            password = DB_PASS,
-            cursor_factory = DictCursor,
-            connect_timeout = 5
-        )
+        # PostgreSQL/TimescaleDB 데이터베이스 연결 시도
+        conn = psycopg2.connect(host=DB_HOST, port=DB_PORT, dbname=DB_NAME,
+                                 user=DB_USER, password=DB_PASS,
+                                 cursor_factory=DictCursor, connect_timeout=5)
     except Exception as e:
         logger.error("DB 연결 실패: %s", e)
-        sys.exit(1)
+        sys.exit(1) # 연결 실패 시 스크립트 종료
 
     try:
+        # 정의된 모든 윈도우에 대해 순차적으로 do_rollup 함수 실행
         for suffix, interval, retention in WINDOWS:
             do_rollup(conn, suffix, interval, retention)
-    except Exception as e:
-        logger.exception("집계 중 에러 발생: %s", e)
+    except Exception:
+        # 집계 작업 중 예상치 못한 에러 발생 시 로그 기록
+        logger.exception("집계 중 에러 발생")
     finally:
-        conn.close()
-        logger.info("DB 연결 종료")
+        if conn:
+            conn.close() # DB 연결 종료
+            logger.info("DB 연결 종료")
 
 if __name__ == "__main__":
     main()

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import os
 import uuid
 from sqlalchemy import Column, String, Integer, Text, Boolean, TIMESTAMP, Numeric, Index, UniqueConstraint, ForeignKey, func
@@ -8,10 +9,15 @@ IS_PG = DATABASE_URL.startswith("postgresql")
 
 if IS_PG:
     from sqlalchemy.dialects.postgresql import JSONB as JSONType
+    from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY
     from sqlalchemy.dialects.postgresql import TSRANGE as TsRangeType
+    def Arr(item_type):
+        return PG_ARRAY(item_type)
 else:
     from sqlalchemy import JSON as JSONType
     TsRangeType = JSONType
+    def Arr(item_type):
+        return JSONType
 
 class Agent(Base):
     __tablename__ = "agents"
@@ -49,7 +55,7 @@ class RawLog(Base):
     source_type = Column(String, nullable=False)
     raw_line = Column(Text, nullable=False)
     hash_sha256 = Column(String)
-    tags = Column(JSONType)
+    tags = Column(Arr(String), nullable=False, default=list)
     inserted_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     __table_args__ = (
         Index("idx_raw_logs_client_ts", "client_id", "ts"),
@@ -85,8 +91,8 @@ class Incident(Base):
     time_window = Column(TsRangeType)
     category = Column(String)
     summary = Column(Text)
-    attack_mapping = Column(JSONType)
-    recommended_actions = Column(JSONType)
+    attack_mapping = Column(Arr(String), default=list)
+    recommended_actions = Column(Arr(String), default=list)
     confidence = Column(Numeric)
     status = Column(String)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
@@ -103,17 +109,11 @@ class Job(Base):
     approvals_granted = Column(Integer, default=0)
     expires_at = Column(TIMESTAMP(timezone=True))
     idempotency_key = Column(String, nullable=False)
-    rate_limit_per_min = Column(Integer)
-    dry_run = Column(Boolean, default=False)
-    signature = Column(Text)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     status = Column(String, default="pending")
-    last_delivered_at = Column(TIMESTAMP(timezone=True))
-    command_hash = Column(String)
     __table_args__ = (
         Index("idx_jobs_agent_status", "agent_id", "status"),
         Index("idx_jobs_status_created", "status", "created_at"),
-        UniqueConstraint("client_id", "agent_id", "idempotency_key", name="uq_job_idempotency"),
     )
 
 class JobResult(Base):
