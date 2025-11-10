@@ -18,13 +18,14 @@ from utils_security import (
 router = APIRouter()
 logger = logging.getLogger("ingest")
 
-BACKPRESSURE_WINDOW_SECONDS = 60
-BACKPRESSURE_MAX_RECORDS = 5_000
+BACKPRESSURE_WINDOW_SECONDS = 30 #테스트용 설정
+BACKPRESSURE_MAX_RECORDS = 50 #테스트용 설정
+BACKPRESSURE_RETRY_AFTER_SECONDS = 1 #테스트용 설정
 
 @router.post(
     "/ingest/logs",
     response_model=schemas.IngestResponse,
-    status_code=status.HTTP_200_OK,
+    status_code=status.HTTP_202_ACCEPTED,
 )
 async def ingest_logs(
     req: Request,
@@ -52,13 +53,13 @@ async def ingest_logs(
     try:
         verify_timestamp(req_ts)
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
 
     body_bytes = await req.body()
     try:
         verify_payload_hash(body_bytes, payload_hash)
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
 
     ts_bucket = make_ts_bucket(req_ts)
 
@@ -77,7 +78,7 @@ async def ingest_logs(
         ts_bucket=ts_bucket,
     ).first()
     if replay:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="replay_blocked")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="REPLAY_BLOCKED")
 
     window_start = datetime.now(timezone.utc) - timedelta(seconds=BACKPRESSURE_WINDOW_SECONDS)
     recent_count = db.query(model.RawLog).filter(
@@ -94,7 +95,11 @@ async def ingest_logs(
             recent_count,
         )
         db.rollback()
-        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="backpressure")
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="backpressure",
+            headers={"Retry-After": str(BACKPRESSURE_RETRY_AFTER_SECONDS)},
+        )
 
     new_key = model.IdempotencyKey(
         client_id=payload.meta.client_id,
@@ -108,7 +113,11 @@ async def ingest_logs(
     if queue_is_overloaded():
         logger.warning("simulated queue overload for agent %s", payload.agent_id)
         db.rollback()
-        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="backpressure")
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="backpressure",
+            headers={"Retry-After": str(BACKPRESSURE_RETRY_AFTER_SECONDS)},
+        )
 
     accepted_count = 0
     for rec in payload.records:

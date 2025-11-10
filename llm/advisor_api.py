@@ -1,139 +1,204 @@
-# llm_advisor/advisor_api.py
+# llm/advisor_api.py
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field, validator
-from typing import List, Optional
-import json
+import json, jsonschema, asyncio, re, logging
 from pathlib import Path
-import asyncio
+import os
+import traceback
 
-from llm.data_masking import mask_all
+# -------------------------
+# 내부 모듈 import
+# -------------------------
+from llm.models import EvidenceRef, IncidentOutput
+from llm.prompt_manager import PromptManager
+from llm.masking.data_masking import mask_all, validate_masked
 from llm.model_gateway import ModelGateway
-from llm.local_llm_PoC import DummyLocalLLM  # 로컬 LLM PoC 클래스
-
-app = FastAPI(title="LLM Advisor PoC")
-
-# -------------------------
-# 로컬 LLM 초기화
-# -------------------------
-local_llm = DummyLocalLLM()
-
+from llm.local_llm_PoC import DummyLocalLLM
+from llm.utils.llm_response_handler import (
+    evaluate_confidence,
+    determine_hil_requirement,
+    log_incident_decision,
+)
 
 # -------------------------
-# 데이터 모델
+# FastAPI 앱 초기화
 # -------------------------
-class EvidenceRef(BaseModel):
-    type: str = Field(..., pattern="^(raw|yara|hex|webhook)$")
-    ref_id: str
-    source: str
-    offset: int
-    length: int
-    sha256: str
-    rule_id: Optional[str] = None
+app = FastAPI(title="Incident Advisor API (Step1~3 통합)")
 
-
-class IncidentOutput(BaseModel):
-    summary: str
-    attack_mapping: List[str]
-    recommended_actions: List[str]
-    confidence: float = Field(..., ge=0.0, le=1.0)
-    evidence_refs: List[EvidenceRef]
-    hil_required: bool
-
-    @validator("attack_mapping", "recommended_actions")
-    def non_empty(cls, v):
-        if not v:
-            raise ValueError("빈 리스트는 허용되지 않음")
-        return v
-
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 # -------------------------
-# 메모리 임시 저장소
+# 프롬프트 매니저 & 모델 게이트웨이 초기화
+# -------------------------
+prompt_manager = PromptManager(base_path="llm/prompt_templates")
+
+LLM_MODE = os.getenv("LLM_MODE", "local").lower()
+if LLM_MODE == "gateway":
+    model_gateway = ModelGateway(local_model_path="models/ggml.bin")
+else:
+    model_gateway = DummyLocalLLM()
+
+logger.info(f"✅ LLM Engine Loaded: {model_gateway.__class__.__name__}")
+
+# -------------------------
+# JSON 스키마 로드
+# -------------------------
+BASE_DIR = Path(__file__).resolve().parent
+POSSIBLE_PATHS = [
+    BASE_DIR / "output_schema.json",
+    BASE_DIR.parent / "llm" / "output_schema.json",
+]
+for p in POSSIBLE_PATHS:
+    if p.exists():
+        SCHEMA_PATH = p
+        break
+else:
+    raise FileNotFoundError("❌ output_schema.json 파일을 찾을 수 없습니다.")
+
+with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
+    OUTPUT_SCHEMA = json.load(f)
+
+def validate_schema(data: dict) -> bool:
+    try:
+        jsonschema.validate(instance=data, schema=OUTPUT_SCHEMA)
+        return True
+    except jsonschema.ValidationError:
+        return False
+
+# -------------------------
+# 증거 유효성 검사
+# -------------------------
+def validate_evidence_refs(evidences: list):
+    allowed_types = {"raw", "yara", "hex", "webhook"}
+    for e in evidences:
+        if e.get("type") not in allowed_types:
+            raise HTTPException(
+                status_code=422,
+                detail={"error_code": "EVIDENCE_INVALID", "message": f"Invalid type: {e.get('type')}"}
+            )
+        for f in ["ref_id", "source", "offset", "length", "sha256"]:
+            if f not in e:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"error_code": "EVIDENCE_INVALID", "message": f"Missing field: {f}"}
+                )
+        if not isinstance(e["offset"], int) or not isinstance(e["length"], int):
+            raise HTTPException(
+                status_code=422,
+                detail={"error_code": "EVIDENCE_INVALID", "message": "offset/length must be integer"}
+            )
+        if not re.fullmatch(r"[0-9a-fA-F]{6,64}", e["sha256"]):
+            raise HTTPException(
+                status_code=422,
+                detail={"error_code": "EVIDENCE_INVALID", "message": "Invalid sha256 format"}
+            )
+
+# -------------------------
+# 프롬프트 빌드
+# -------------------------
+def build_prompt(name: str, event_text: str, evidences: list, extra=None):
+    tpl = prompt_manager.load_prompt(name)
+    evidence_block = "\n".join(
+        f"ref_id: {e['ref_id']}\ntype: {e['type']}\nsource: {e['source']}\nsha256: {e.get('sha256', '')}\nsnippet: \"{e.get('snippet', '')}\"\n---"
+        for e in evidences
+    )
+    return tpl.format(
+        event_text=event_text,
+        evidence_block=evidence_block,
+        attack_mapping_json=extra or "[]"
+    )
+
+# -------------------------
+# 인시던트 저장소 (임시 메모리)
 # -------------------------
 INCIDENTS = {}
 
-
 # -------------------------
-# 유틸: 프롬프트 불러오기
-# -------------------------
-def load_prompt(name: str) -> str:
-    path = Path("prompt_templates") / f"{name}_prompt.txt"
-    if not path.exists():
-        raise FileNotFoundError(f"Prompt not found: {name}")
-    return path.read_text(encoding="utf-8")
-
-
-def build_prompt(name, event_text, evidences, extra=None):
-    tpl = load_prompt(name)
-    evidence_block = "\n".join(
-        f"ref_id: {e['ref_id']}\ntype: {e['type']}\nsource: {e['source']}\nsnippet: \"{e['snippet']}\"\nsha256: {e.get('sha256','')}\n---"
-        for e in evidences
-    )
-    return tpl.format(event_text=event_text, evidence_block=evidence_block, attack_mapping_json=extra or "[]")
-
-
-# -------------------------
-# 엔드포인트
+# /analyze 엔드포인트
 # -------------------------
 @app.post("/analyze")
 async def analyze_log(payload: dict):
-    """
-    로그 업로드 및 분석 트리거 (로컬 LLM 연결 PoC)
-    """
-    incident_id = payload.get("incident_id", "demo")
-    event_text = payload.get("event_text", "")
-    evidences = payload.get("evidences", [])
-
-    # 1) mask inputs
-    event_masked, _ = mask_all(event_text)
-    masked_evidences = []
-    for e in evidences:
-        s = e.get("snippet", "")
-        masked_snippet, _ = mask_all(s)
-        e_copy = dict(e)
-        e_copy["snippet"] = masked_snippet
-        masked_evidences.append(e_copy)
-
-    # 2) build prompt (summary)
-    prompt = build_prompt("summary", event_masked, masked_evidences)
-
-    # 3) call local LLM (DummyLocalLLM.generate returns JSON string)
     try:
-        loop = asyncio.get_event_loop()
-        raw_response = await loop.run_in_executor(None, local_llm.generate, prompt)
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"LLM generate failed: {e}")
+        incident_id = payload.get("incident_id", "demo")
+        event_text = payload.get("event_text", "")
+        evidences = payload.get("evidences", [])
 
-    # 4) parse JSON
-    try:
+        # 1️⃣ 데이터 마스킹
+        event_masked, _ = mask_all(event_text)
+        masked_evidences = []
+        for e in evidences:
+            s = e.get("snippet", "")
+            masked_snippet, _ = mask_all(s)
+            e_copy = dict(e)
+            e_copy["snippet"] = masked_snippet
+            masked_evidences.append(e_copy)
+
+        # 2️⃣ 증거 유효성 검사
+        validate_evidence_refs(masked_evidences)
+
+        # 3️⃣ 프롬프트 생성
+        prompt = build_prompt("summary", event_masked, masked_evidences)
+
+        # 3.1️⃣ 프롬프트 마스킹 검증
+        if not validate_masked(prompt):
+            raise HTTPException(status_code=422, detail="Prompt contains unmasked sensitive info")
+
+        # 4️⃣ LLM 호출
+        try:
+            if LLM_MODE == "gateway":
+                raw_response = await model_gateway.generate(prompt)
+            else:
+                # DummyLocalLLM는 동기 함수
+                raw_response = model_gateway.generate(prompt)
+        except Exception as e:
+            logger.warning(f"⚠️ Local LLM 실패: {e} → Gateway로 재시도")
+            gw = ModelGateway(local_model_path="models/ggml.bin")
+            raw_response = await gw.generate(prompt)
+
         parsed = json.loads(raw_response)
-    except Exception:
-        raise HTTPException(status_code=422, detail="LLM returned non-JSON")
 
-    # 5) build EvidenceRef objects
-    evidence_objs = [
-        EvidenceRef(**e) for e in masked_evidences
-    ]
+        # 5️⃣ 스키마 검증
+        if not validate_schema(parsed):
+            raise HTTPException(status_code=422, detail={"error_code": "SCHEMA_INVALID", "message": "LLM output schema mismatch"})
 
-    # 6) validate -> IncidentOutput
-    incident = IncidentOutput(
-        summary=parsed.get("summary", "모른다"),
-        attack_mapping=parsed.get("attack_mapping", ["모른다"]),
-        recommended_actions=parsed.get("recommended_actions", ["모른다"]),
-        confidence=float(parsed.get("confidence", 0.0)),
-        evidence_refs=evidence_objs,
-        hil_required=bool(parsed.get("hil_required", False))
-    )
+        # 6️⃣ 신뢰도 평가 및 HIL 판단
+        confidence = evaluate_confidence(parsed)
+        hil_required = determine_hil_requirement(confidence)
+        log_incident_decision(incident_id, confidence, hil_required)
 
-    INCIDENTS[incident_id] = incident
-    return {"incident_id": incident_id, "status": "analyzed"}
+        # 7️⃣ EvidenceRef 객체 변환
+        evidence_objs = [EvidenceRef(**e) for e in masked_evidences]
 
+        # 8️⃣ IncidentOutput 생성 및 저장
+        incident = IncidentOutput(
+            incident_id=incident_id,
+            summary=parsed.get("summary", "N/A"),
+            attack_mapping=parsed.get("attack_mapping", []),
+            recommended_actions=parsed.get("recommended_actions", []),
+            confidence=confidence,
+            hil_required=hil_required,
+            evidences=evidence_objs
+        )
+        INCIDENTS[incident_id] = incident
 
+        next_action = "complete" if not hil_required else "add_evidence"
+        return {"incident_id": incident_id, "status": "analyzed", "next_action": next_action,
+                "confidence": confidence, "hil_required": hil_required}
+
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+# -------------------------
+# 부가 엔드포인트
+# -------------------------
 @app.get("/incidents/{id}")
 def get_incident(id: str):
     if id not in INCIDENTS:
         raise HTTPException(404, "Incident not found")
     return INCIDENTS[id]
-
 
 @app.post("/incidents/{id}/approve")
 def approve_incident(id: str):
@@ -142,13 +207,9 @@ def approve_incident(id: str):
     INCIDENTS[id].hil_required = False
     return {"incident_id": id, "approved": True}
 
-
 @app.get("/prompt/{name}")
 def get_prompt(name: str):
-    """
-    특정 프롬프트 파일 내용 반환 (PoC용)
-    """
-    path = Path("prompt_templates") / f"{name}_prompt.txt"
+    path = Path("llm/prompt_templates") / f"{name}_prompt.txt"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Prompt not found")
     return {"prompt_name": name, "content": path.read_text(encoding="utf-8")}
