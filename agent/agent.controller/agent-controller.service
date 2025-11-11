@@ -13,7 +13,7 @@ Environment="AGENT_TOKEN=dev_ctrl_token"
 Environment="AGENT_ID=agent-01"
 Environment="POLL_INTERVAL=5"
 Environment="HMAC_SECRET=super_secret_hmac_key"
-# 실제 서비스/공유용 템플릿
+# 실제 서비스/공유용 
 #Environment="CONTROLLER_URL=http://127.0.0.1:8000"
 #Environment="AGENT_TOKEN=${CTRL_TOKEN}"      # 예시: dev_ctrl_token
 #Environment="AGENT_ID=agent-01"
