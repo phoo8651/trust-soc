@@ -7,14 +7,14 @@ Wants=network-online.target
 Type=simple
 User=root                         # 19000 포트 listen + 간단해서 root 유지 (추후 전용 계정 분리 가능)
 WorkingDirectory=/opt/secure-forwarder
-
+#로컬 테스트용
 Environment="LOCAL_TOKEN=dev_agent_token"
 Environment="UPSTREAM_URL=http://127.0.0.1:8000/v1/logs"
 Environment="UPSTREAM_LOG_TOKEN=dev_log_token"
 Environment="HMAC_SECRET=super_secret_hmac_key"
 Environment="LISTEN_HOST=127.0.0.1"
 Environment="LISTEN_PORT=19000"
-#배포용
+# 실제 서비스/공유용 
 #Environment="LOCAL_TOKEN=${LOCAL_TOKEN}"          # 예: dev_agent_token
 #Environment="UPSTREAM_URL=http://127.0.0.1:8000/v1/logs"
 #Environment="UPSTREAM_LOG_TOKEN=${LOG_TOKEN}"     # 예: dev_log_token
