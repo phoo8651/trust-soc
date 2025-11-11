@@ -14,11 +14,11 @@ Environment="AGENT_ID=agent-01"
 Environment="POLL_INTERVAL=5"
 Environment="HMAC_SECRET=super_secret_hmac_key"
 #배포용 
-Environment="CONTROLLER_URL=http://127.0.0.1:8000"
-Environment="AGENT_TOKEN=${CTRL_TOKEN}"      # 예시: dev_ctrl_token
-Environment="AGENT_ID=agent-01"
-Environment="POLL_INTERVAL=5"
-Environment="HMAC_SECRET=${HMAC_SECRET}"    # 예시: super_secret_hmac_key
+#Environment="CONTROLLER_URL=http://127.0.0.1:8000"
+#Environment="AGENT_TOKEN=${CTRL_TOKEN}"      # 예시: dev_ctrl_token
+#Environment="AGENT_ID=agent-01"
+#Environment="POLL_INTERVAL=5"
+#Environment="HMAC_SECRET=${HMAC_SECRET}"    # 예시: super_secret_hmac_key
 #
 ExecStart=/usr/bin/python3 /opt/agent-controller/agent_controller.py
 
