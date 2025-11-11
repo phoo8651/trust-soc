@@ -1,0 +1,59 @@
+[Unit]
+Description=Agent Controller (pull commands from control API)
+After=network-online.target secure-forwarder.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root                                 # otel-agent 재시작(systemctl) 위해 root 유지
+WorkingDirectory=/opt/agent-controller
+
+Environment="CONTROLLER_URL=http://127.0.0.1:8000"
+Environment="AGENT_TOKEN=dev_ctrl_token"
+Environment="AGENT_ID=agent-01"
+Environment="POLL_INTERVAL=5"
+Environment="HMAC_SECRET=super_secret_hmac_key"
+
+ExecStart=/usr/bin/python3 /opt/agent-controller/agent_controller.py
+
+Restart=always
+RestartSec=5
+
+
+NoNewPrivileges=true
+# 컨트롤러와 자식 프로세스가 추가 권한(setuid 등) 획득 금지.
+
+PrivateTmp=true
+# 다른 서비스와 tmp 공간 분리.
+
+RestrictSUIDSGID=true
+# setuid/gid 바이너리를 통한 권한  상승 차단.
+
+ProtectSystem=full
+# /usr, /etc, /boot 읽기 전용.
+
+ProtectHome=true
+# 홈 디렉토리 접근 차단.
+
+ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+# 시스템 전역 설정/로그/모듈 변경 금지.
+
+RestrictNamespaces=true
+LockPersonality=true
+# 네임스페이스/ABI 악용 방지.
+
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# HTTP 통신만 필요하므로 다른 네트워크 패밀리 차단 차후 필요에 따라 수정 가능함.
+
+# otel-agent remote 설정 파일을 써야 하므로 허용
+ReadWritePaths=/etc/secure-log-agent/remote.d
+
+# systemd와 통신(systemctl reload/restart) 위해 런타임 영역 허용
+ReadWritePaths=/run
+ReadWritePaths=/var/run
+
+[Install]
+WantedBy=multi-user.target
