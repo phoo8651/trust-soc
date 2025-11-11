@@ -7,13 +7,13 @@ Wants=network-online.target
 Type=simple
 User=root                                 # otel-agent 재시작(systemctl) 위해 root 유지
 WorkingDirectory=/opt/agent-controller
-
+#로컬 테스트용
 Environment="CONTROLLER_URL=http://127.0.0.1:8000"
 Environment="AGENT_TOKEN=dev_ctrl_token"
 Environment="AGENT_ID=agent-01"
 Environment="POLL_INTERVAL=5"
 Environment="HMAC_SECRET=super_secret_hmac_key"
-#배포용 
+# 실제 서비스/공유용 템플릿
 #Environment="CONTROLLER_URL=http://127.0.0.1:8000"
 #Environment="AGENT_TOKEN=${CTRL_TOKEN}"      # 예시: dev_ctrl_token
 #Environment="AGENT_ID=agent-01"
