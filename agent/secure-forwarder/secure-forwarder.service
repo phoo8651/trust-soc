@@ -6,25 +6,36 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=root                         # 19000 포트 listen + 간단해서 root 유지 (추후 전용 계정 분리 가능)
-WorkingDirectory=/opt/secure-forwarder
-#로컬 테스트용
-Environment="LOCAL_TOKEN=dev_agent_token"
-Environment="UPSTREAM_URL=http://127.0.0.1:8000/v1/logs"
-Environment="UPSTREAM_LOG_TOKEN=dev_log_token"
-Environment="HMAC_SECRET=super_secret_hmac_key"
-Environment="LISTEN_HOST=127.0.0.1"
-Environment="LISTEN_PORT=19000"
-# 실제 서비스/공유용 
-#Environment="LOCAL_TOKEN=${LOCAL_TOKEN}"          # 예: dev_agent_token
-#Environment="UPSTREAM_URL=http://127.0.0.1:8000/v1/logs"
-#Environment="UPSTREAM_LOG_TOKEN=${LOG_TOKEN}"     # 예: dev_log_token
-#Environment="HMAC_SECRET=${HMAC_SECRET}"          # 예: super_secret_hmac_key
 
-ExecStart=/usr/bin/python3 /opt/secure-forwarder/secure_forwarder.py
+# ▶ 작업 디렉터리: lastagent 구조에 맞게 변경
+WorkingDirectory=/home/last/lastagent/forwarder
+
+# ─────────────────────────────────────────────
+# 환경 변수: 이제는 .env에서 읽어오도록 변경
+#   - /home/last/lastagent/etc/.env 내부에:
+#       LOCAL_TOKEN=...
+#       UPSTREAM_URL=...
+#       UPSTREAM_LOG_TOKEN=...
+#       HMAC_SECRET=...
+#       LISTEN_HOST=127.0.0.1
+#       LISTEN_PORT=19000
+#   등 정의
+# ─────────────────────────────────────────────
+EnvironmentFile=/home/last/lastagent/etc/.env
+
+# (참고용) 로컬 테스트용 인라인 설정을 쓰고 싶다면, 아래처럼 추가로 쓸 수도 있음:
+#Environment="LOCAL_TOKEN=dev_agent_token"
+#Environment="UPSTREAM_URL=http://127.0.0.1:8000/v1/logs"
+#Environment="UPSTREAM_LOG_TOKEN=dev_log_token"
+#Environment="HMAC_SECRET=super_secret_hmac_key"
+#Environment="LISTEN_HOST=127.0.0.1"
+#Environment="LISTEN_PORT=19000"
+
+# ▶ venv 기반 파이썬 사용으로 변경
+ExecStart=/home/last/lastagent/venv/bin/python /home/last/lastagent/forwarder/secure-forwarder.py
 
 Restart=always
 RestartSec=3
-
 
 NoNewPrivileges=true
 # forwarder 자체도 추가 권한(setuid 등) 못 얻도록.
@@ -35,14 +46,17 @@ PrivateTmp=true
 ProtectSystem=full
 # 시스템 중요 경로 읽기 전용. 코드/환경설정 외에는 쓰기 불가.
 
-ProtectHome=true
-# 홈 디렉토리 접근 차단.
+# ⚠ 원래는 /opt 쓸 때 Home 보호가 안전했는데,
+#    지금은 /home/last/lastagent에서 실행하므로 ProtectHome=true 를 켜면
+#    /home 접근 자체가 막혀서 동작에 문제가 생길 수 있음.
+#    필요하면 나중에 BindPaths 등으로 세밀하게 열어줄 수 있음.
+#ProtectHome=true
 
 ProtectControlGroups=true
 ProtectKernelLogs=true
 ProtectKernelModules=true
 ProtectKernelTunables=true
-# 커널/컨트롤그룹 관련으로  민감 자원 건드리지 못하게하기 위해
+# 커널/컨트롤그룹 관련으로 민감 자원 건드리지 못하게 하기 위해
 
 RestrictSUIDSGID=true
 RestrictNamespaces=true
@@ -50,13 +64,13 @@ LockPersonality=true
 # 권한 상승 / 네임스페이스 악용 / ABI 변경 차단.
 
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-# HTTP만 쓰니까 이 정도만 허용.방향성에 따라 차후 수정 가능
+# HTTP만 쓰니까 이 정도만 허용. 방향성에 따라 차후 수정 가능
 
 PrivateDevices=true
 # /dev 접근 최소화. 거의 모든 디바이스 파일을 숨김.
 
-ReadOnlyPaths=/opt/secure-forwarder
-# 코드 디렉토리는 읽기 전용. 실행 중에 forwarder 코드 바뀌지 않게 하는 부분.
+# ▶ 코드 위치도 lastagent 구조에 맞춰 read-only로 제한
+ReadOnlyPaths=/home/last/lastagent/forwarder
 
 [Install]
 WantedBy=multi-user.target
