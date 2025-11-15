@@ -12,6 +12,11 @@ Secure Forwarder (HMAC Gate) for Logs
 즉:
   otel-agent --(LOCAL_TOKEN)--> secure-forwarder
   secure-forwarder --(LOG_TOKEN + HMAC)--> ingest-server
+
+개선 사항:
+- 토큰/HMAC 키를 환경변수 필수값으로 강제 (디폴트 dev 토큰 제거)
+- 요청 바디 크기 제한 추가 (MAX_BODY_SIZE)
+- ThreadingMixIn 기반 HTTP 서버 사용 (동시 요청 처리)
 """
 
 import os
@@ -22,18 +27,33 @@ import hmac
 import hashlib
 import time
 import uuid
+from typing import Dict
 
 
-LOCAL_TOKEN = os.getenv("LOCAL_TOKEN", "dev_agent_token")
-UPSTREAM_URL = os.getenv("UPSTREAM_URL", "http://127.0.0.1:8000/v1/logs")
-UPSTREAM_LOG_TOKEN = os.getenv("UPSTREAM_LOG_TOKEN", "dev_log_token")
-HMAC_SECRET = os.getenv("HMAC_SECRET", "super_secret_hmac_key")
+# 최대 허용 바디 크기 (bytes), 기본 5MB
+MAX_BODY_SIZE = int(os.getenv("MAX_BODY_SIZE", str(5 * 1024 * 1024)))
 
+
+def require_env(name: str) -> str:
+    """필수 환경변수 로딩. 없으면 즉시 종료."""
+    value = os.getenv(name)
+    if not value:
+        raise SystemExit(f"[FATAL] required env {name} is not set")
+    return value
+
+
+# === 환경변수 (필수) ===
+LOCAL_TOKEN = require_env("LOCAL_TOKEN")
+UPSTREAM_URL = require_env("UPSTREAM_URL")
+UPSTREAM_LOG_TOKEN = require_env("UPSTREAM_LOG_TOKEN")
+HMAC_SECRET = require_env("HMAC_SECRET")
+
+# === 환경변수 (선택) ===
 LISTEN_HOST = os.getenv("LISTEN_HOST", "127.0.0.1")
 LISTEN_PORT = int(os.getenv("LISTEN_PORT", "19000"))
 
 
-def make_hmac_headers(method: str, path: str, body: bytes) -> dict:
+def make_hmac_headers(method: str, path: str, body: bytes) -> Dict[str, str]:
     ts = str(int(time.time()))
     nonce = str(uuid.uuid4())
     payload_hash = hashlib.sha256(body or b"").hexdigest()
@@ -57,7 +77,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     server_version = "SecureForwarder/1.0"
 
     def log_message(self, fmt, *args):
-        # 조용히 하고 싶으면 pass
+        # 너무 시끄러우면 pass 로 바꿔도 됨
         print("[FWD]", fmt % args)
 
     def do_POST(self):
@@ -70,7 +90,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_error(401, "invalid local token")
             return
 
-        length = int(self.headers.get("Content-Length", "0") or "0")
+        length_header = self.headers.get("Content-Length", "0") or "0"
+        try:
+            length = int(length_header)
+        except ValueError:
+            self.send_error(400, "invalid Content-Length")
+            return
+
+        if length < 0:
+            self.send_error(400, "invalid Content-Length")
+            return
+
+        if length > MAX_BODY_SIZE:
+            self.send_error(413, "payload too large")
+            return
+
         body = self.rfile.read(length)
 
         # upstream 헤더 구성: LOG_TOKEN + HMAC
@@ -90,16 +124,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # upstream 응답을 그대로 전달
         self.send_response(resp.status_code)
         for k, v in resp.headers.items():
-            # 너무 과한 헤더는 스킵하고 Content-Type 정도만
             if k.lower() in ("content-type",):
                 self.send_header(k, v)
         self.end_headers()
         self.wfile.write(resp.content)
 
 
+class ThreadingHTTPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+
 def main():
-    with socketserver.TCPServer((LISTEN_HOST, LISTEN_PORT), Handler) as httpd:
-        print(f"[FWD] listening on {LISTEN_HOST}:{LISTEN_PORT}, upstream={UPSTREAM_URL}")
+    print(
+        f"[FWD] listening on {LISTEN_HOST}:{LISTEN_PORT}, "
+        f"upstream={UPSTREAM_URL}, max_body={MAX_BODY_SIZE} bytes"
+    )
+    with ThreadingHTTPServer((LISTEN_HOST, LISTEN_PORT), Handler) as httpd:
         httpd.serve_forever()
 
 
