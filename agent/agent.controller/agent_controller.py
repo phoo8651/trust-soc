@@ -14,6 +14,11 @@ Agent Controller
     GET /commands, POST /ack 요청에
     X-Request-Timestamp, X-Nonce, X-Idempotency-Key,
     X-Payload-Hash, X-Signature 헤더를 추가.
+
+개선 사항:
+- CONTROLLER_URL, AGENT_TOKEN 을 필수 환경변수로 강제
+- update_config 의 otel_fragment 크기 제한 (MAX_FRAGMENT_SIZE)
+- HMAC_SECRET 미설정 시 경고 로그
 """
 
 import os
@@ -29,6 +34,14 @@ import hashlib
 import uuid
 
 
+def require_env(name: str) -> str:
+    """필수 환경변수 로딩. 없으면 FATAL 종료."""
+    value = os.getenv(name)
+    if not value:
+        raise SystemExit(f"[FATAL] required env {name} is not set")
+    return value
+
+
 def get_agent_id() -> str:
     """AGENT_ID 환경변수 우선, 없으면 hostname 사용."""
     env_id = os.getenv("AGENT_ID")
@@ -38,13 +51,13 @@ def get_agent_id() -> str:
 
 
 AGENT_ID = get_agent_id()
-CONTROLLER_URL = os.getenv("CONTROLLER_URL", "http://127.0.0.1:8000")
-AGENT_TOKEN = os.getenv("AGENT_TOKEN", "dev_example_token")
+CONTROLLER_URL = require_env("CONTROLLER_URL")
+AGENT_TOKEN = require_env("AGENT_TOKEN")
 HMAC_SECRET = os.getenv("HMAC_SECRET")  # 없으면 HMAC 비활성
 POLL_INTERVAL = float(os.getenv("POLL_INTERVAL", "10"))
 
-if not CONTROLLER_URL:
-    raise SystemExit("[FATAL] CONTROLLER_URL is not set")
+# update_config 시 최대 허용 otel_fragment 크기 (bytes)
+MAX_FRAGMENT_SIZE = int(os.getenv("MAX_FRAGMENT_SIZE", str(200 * 1024)))  # 200KB 기본
 
 BASE_HEADERS = {
     "Authorization": f"Bearer {AGENT_TOKEN}",
@@ -148,6 +161,10 @@ def apply_update_config(payload: Dict[str, Any]) -> str:
     if not fragment:
         return "no otel_fragment provided"
 
+    fragment_bytes = fragment.encode("utf-8")
+    if len(fragment_bytes) > MAX_FRAGMENT_SIZE:
+        return f"otel_fragment too large (> {MAX_FRAGMENT_SIZE} bytes)"
+
     remote_dir = "/etc/secure-log-agent/remote.d"
     remote_cfg = os.path.join(remote_dir, "remote.yaml")
 
@@ -187,9 +204,13 @@ def apply_command(cmd: Dict[str, Any]) -> str:
 
 
 def main() -> None:
+    if not HMAC_SECRET:
+        log("[WARN] HMAC_SECRET is not set. Control traffic is only protected by Bearer token.")
+
     log(
         f"Agent Controller started. controller={CONTROLLER_URL}, "
-        f"interval={POLL_INTERVAL}s, hmac={'on' if HMAC_SECRET else 'off'}"
+        f"interval={POLL_INTERVAL}s, hmac={'on' if HMAC_SECRET else 'off'}, "
+        f"max_fragment={MAX_FRAGMENT_SIZE} bytes"
     )
 
     while True:
