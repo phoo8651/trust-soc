@@ -3,23 +3,24 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
-from fastapi import APIRouter, Depends, Query, Response, Header
+from fastapi import APIRouter, Depends, Header, Query, Response, Request
 from sqlalchemy.orm import Session
 
 from auth_core import compute_etag, compute_policy_signature
 from db import get_db
 import model
 import schemas
+from security import SecurityContext, get_security_context, require_role, apply_rls
 
 router = APIRouter()
 logger = logging.getLogger("policy")
+
 
 DEFAULT_GLOBAL_POLICY: Dict[str, Dict] = {
     "sampling": {"default_rate": 0.1},
     "masking": {"rules": ["ip", "user_id"]},
     "crypto": {"type": "AES-GCM", "enabled": True},
 }
-
 DEFAULT_CLIENT_POLICY: Dict[str, Dict] = {}
 DEFAULT_HOST_POLICY: Dict[str, Dict] = {}
 
@@ -33,12 +34,11 @@ def _deep_merge(base: Dict, overlay: Dict) -> Dict:
     return base
 
 
-def _lookup_policy(
-    db: Session,
-    scope: str,
-    client_id: str,
-    host: str,
-) -> Dict:
+def _lookup_policy(db: Session, scope: str, client_id: str, host: str) -> Dict:
+    """
+    policies(scope, client_id, host) → {config, etag}
+    DB 없으면 폴백 기본값과 그에 대한 etag 생성
+    """
     query = db.query(model.Policy).filter(model.Policy.scope == scope)
     if scope in ("client", "host"):
         query = query.filter(model.Policy.client_id == client_id)
@@ -61,14 +61,15 @@ def _lookup_policy(
     return {"config": cfg, "etag": etag}
 
 
-def _norm_etag(s: str) -> str:
-    """W/"abc" → abc, "abc" → abc, 공백 제거."""
-    if not s:
-        return s
-    s = s.strip()
-    if s.startswith("W/"):
-        s = s[2:]
-    return s.strip('"').strip()
+def _normalize_etag(val: Optional[str]) -> Optional[str]:
+    if not val:
+        return val
+    v = val.strip()
+    if v.startswith("W/"):
+        v = v[2:]
+    if len(v) >= 2 and v[0] == '"' and v[-1] == '"':
+        v = v[1:-1]
+    return v
 
 
 @router.get("/policy", response_model=schemas.PolicyResponse)
@@ -77,53 +78,60 @@ def get_policy(
     host: str = Query(...),
     db: Session = Depends(get_db),
     resp: Response = None,
-    if_none_match: Optional[str] = Header(default=None),
+    ctx: SecurityContext = Depends(get_security_context),
+    inm: Optional[str] = Header(None, alias="If-None-Match"),
 ):
+
+    require_role(ctx, "POLICY_READ")
+    apply_rls(db, ctx.tenant_id)
+
+
     global_entry = _lookup_policy(db, "global", client_id, host)
     client_entry = _lookup_policy(db, "client", client_id, host)
     host_entry = _lookup_policy(db, "host", client_id, host)
+
 
     effective_cfg = _deep_merge(deepcopy(global_entry["config"]), client_entry["config"])
     effective_cfg = _deep_merge(effective_cfg, host_entry["config"])
 
     issued_at = datetime.now(timezone.utc).isoformat()
 
-    signature_payload = {
-        "issued_at": issued_at,            
+
+    sources = {
+        "global": global_entry["etag"],
+        "client": client_entry["etag"],
+        "host": host_entry["etag"],
+    }
+    stable_payload = {
         "client_id": client_id,
         "host": host,
         "policy": effective_cfg,
-        "sources": {
-            "global": global_entry["etag"],
-            "client": client_entry["etag"],
-            "host": host_entry["etag"],
-        },
+        "sources": sources,
     }
+    etag_val = compute_etag(stable_payload)  
+
+
+    signature_payload = {"issued_at": issued_at, **stable_payload}
     signature = compute_policy_signature(signature_payload)
 
-    etag_payload = {
-        "client_id": client_id,
-        "host": host,
-        "policy": effective_cfg,
-        "sources": {
-            "global": global_entry["etag"],
-            "client": client_entry["etag"],
-            "host": host_entry["etag"],
-        },
-    }
-    etag_val = compute_etag(etag_payload)   
 
-    if if_none_match:
-        candidates = [t.strip() for t in if_none_match.split(",") if t.strip()]
-        norm_req = {_norm_etag(c) for c in candidates}
-        if _norm_etag(etag_val) in norm_req:
-            return Response(status_code=304, headers={"ETag": etag_val})
+    header_etag = f'W/"{etag_val}"'
+    if inm and _normalize_etag(inm) == etag_val:
+        return Response(
+            status_code=304,
+            headers={"ETag": header_etag, "X-Policy-Issued-At": issued_at},
+        )
+
 
     if resp is not None:
-        resp.headers["ETag"] = etag_val
+        resp.headers["ETag"] = header_etag
         resp.headers["X-Policy-Issued-At"] = issued_at
 
-    logger.debug("policy issued for client=%s host=%s etag=%s", client_id, host, etag_val)
+    logger.debug(
+        "policy issued tenant=%s client=%s host=%s etag=%s",
+        ctx.tenant_id, client_id, host, etag_val
+    )
+
 
     return {
         "global_cfg": global_entry["config"],

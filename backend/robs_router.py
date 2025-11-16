@@ -10,6 +10,7 @@ from auth_core import compute_job_signature, verify_job_signature
 from db import get_db
 import model
 import schemas
+from security import SecurityContext, apply_rls, get_security_context, require_role
 
 router = APIRouter()
 logger = logging.getLogger("jobs")
@@ -36,7 +37,15 @@ def _compute_command_hash(job_type: str, args: dict) -> str:
     response_model=schemas.JobEnqueueResponse,
     status_code=status.HTTP_201_CREATED,
 )
-def enqueue_job(body: schemas.JobEnqueueRequest, db: Session = Depends(get_db)):
+def enqueue_job(
+    body: schemas.JobEnqueueRequest,
+    db: Session = Depends(get_db),
+    ctx: SecurityContext = Depends(get_security_context),
+):
+    require_role(ctx, "SOC_ADMIN")
+    apply_rls(db, ctx.tenant_id)
+    if ctx.tenant_id != body.client_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="tenant mismatch")
     if body.job_type not in ALLOWED_AGENT_COMMANDS:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="job type not supported")
 
@@ -46,6 +55,7 @@ def enqueue_job(body: schemas.JobEnqueueRequest, db: Session = Depends(get_db)):
             model.Job.client_id == body.client_id,
             model.Job.agent_id == body.agent_id,
             model.Job.idempotency_key == body.idempotency_key,
+            model.Job.client_id == ctx.tenant_id,
         )
         .first()
     )
@@ -96,12 +106,19 @@ def enqueue_job(body: schemas.JobEnqueueRequest, db: Session = Depends(get_db)):
 
 
 @router.get("/agent/jobs/pull", response_model=schemas.JobPullResponse)
-def pull_jobs(agent_id: str = Query(...), db: Session = Depends(get_db)):
+def pull_jobs(
+    agent_id: str = Query(...),
+    db: Session = Depends(get_db),
+    ctx: SecurityContext = Depends(get_security_context),
+):
+    require_role(ctx, "AGENT")
+    apply_rls(db, ctx.tenant_id)
     now = _utcnow()
     jobs = (
         db.query(model.Job)
         .filter(
             model.Job.agent_id == agent_id,
+            model.Job.client_id == ctx.tenant_id,
             model.Job.status.in_(("ready", "pending")),
             model.Job.job_type.in_(tuple(ALLOWED_AGENT_COMMANDS)),
         )
@@ -164,10 +181,22 @@ def pull_jobs(agent_id: str = Query(...), db: Session = Depends(get_db)):
 
 
 @router.post("/agent/jobs/approve", response_model=schemas.JobApprovalResponse)
-def approve_job(body: schemas.JobApprovalRequest, db: Session = Depends(get_db)):
-    job = db.query(model.Job).filter(model.Job.job_id == body.job_id).first()
+def approve_job(
+    body: schemas.JobApprovalRequest,
+    db: Session = Depends(get_db),
+    ctx: SecurityContext = Depends(get_security_context),
+):
+    require_role(ctx, "SOC_ADMIN")
+    apply_rls(db, ctx.tenant_id)
+    job = (
+        db.query(model.Job)
+        .filter(model.Job.job_id == body.job_id, model.Job.client_id == ctx.tenant_id)
+        .first()
+    )
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="job not found")
+    if job.client_id != ctx.tenant_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="tenant mismatch")
     if job.job_type not in ALLOWED_AGENT_COMMANDS:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="job type not supported")
 
@@ -197,11 +226,23 @@ def approve_job(body: schemas.JobApprovalRequest, db: Session = Depends(get_db))
 
 
 @router.post("/agent/jobs/result", response_model=schemas.JobResultResponse)
-def post_job_result(body: schemas.JobResultRequest, db: Session = Depends(get_db)):
-    job = db.query(model.Job).filter(model.Job.job_id == body.job_id).first()
+def post_job_result(
+    body: schemas.JobResultRequest,
+    db: Session = Depends(get_db),
+    ctx: SecurityContext = Depends(get_security_context),
+):
+    require_role(ctx, "AGENT")
+    apply_rls(db, ctx.tenant_id)
+    job = (
+        db.query(model.Job)
+        .filter(model.Job.job_id == body.job_id, model.Job.client_id == ctx.tenant_id)
+        .first()
+    )
 
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="job not found")
+    if job.client_id != ctx.tenant_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="tenant mismatch")
     if job.job_type not in ALLOWED_AGENT_COMMANDS:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="job type not supported")
 
@@ -218,7 +259,7 @@ def post_job_result(body: schemas.JobResultRequest, db: Session = Depends(get_db
     db.add(jr)
 
     job.status = "done" if body.success else "error"
-    actor = body.actor or body.agent_id
+    actor = ctx.actor_id or body.actor or body.agent_id
     audit_entry = model.AuditLog(
         actor=actor,
         subject=job.job_id,

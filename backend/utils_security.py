@@ -1,31 +1,52 @@
-from datetime import datetime, timezone
+import hmac
 import hashlib
-import random
 import os
+import random
+from datetime import datetime, timezone
 
-MAX_SKEW_SEC = 300  
+MAX_SKEW_SEC = 300
+
 
 def verify_timestamp(ts_str: str):
-    req_time = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+    if not ts_str:
+        raise ValueError("missing request timestamp")
+    try:
+        req_time = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("invalid timestamp format") from exc
+
     now = datetime.now(timezone.utc)
     delta = abs((now - req_time).total_seconds())
     if delta > MAX_SKEW_SEC:
         raise ValueError("timestamp skew too large")
 
+
 def verify_payload_hash(body_bytes: bytes, header_hash: str):
-    algo, hexval = header_hash.split(":", 1)
-    if algo != "sha256":
+    if not header_hash:
+        raise ValueError("missing payload hash header")
+    try:
+        algo, hexval = header_hash.split(":", 1)
+    except ValueError as exc:
+        raise ValueError("invalid payload hash header format") from exc
+
+    if algo.lower() != "sha256":
         raise ValueError("unsupported hash algo")
-    h = hashlib.sha256(body_bytes).hexdigest()
-    if h != hexval:
+
+    try:
+        int(hexval, 16)
+    except ValueError as exc:
+        raise ValueError("payload hash is not hex") from exc
+
+    computed = hashlib.sha256(body_bytes).hexdigest()
+    if not hmac.compare_digest(computed, hexval.lower()):
         raise ValueError("payload hash mismatch")
 
+
 def make_ts_bucket(ts_str: str) -> str:
-  
     return ts_str[:16]
 
-def queue_is_overloaded() -> bool:
 
+def queue_is_overloaded() -> bool:
     if os.getenv("FORCE_QUEUE_OVERLOAD") == "1":
         return True
     try:

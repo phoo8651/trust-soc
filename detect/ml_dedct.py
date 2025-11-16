@@ -64,7 +64,7 @@ def load_or_train(conn):
     # 2. 학습 데이터 조회 (feature_rollup_5m 테이블에서 최근 HISTORY_DAYS 기간 데이터 사용)
     df = pd.read_sql(f"""
         SELECT event_count, error4xx_ratio, error5xx_ratio,
-                unique_url_count, unique_user_count
+               unique_url_count, unique_user_count
         FROM feature_rollup_5m
         WHERE window_start >= NOW() - INTERVAL '{HISTORY_DAYS} days'
           AND event_count IS NOT NULL
@@ -106,8 +106,8 @@ def run_iforest(conn, pipe, thresh):
     # IForest 탐지 대상 조회 (ml_processed가 FALSE인 최근 1시간 데이터)
     df = pd.read_sql("""
         SELECT client_id, host_name, source_ip, window_start,
-                event_count, error4xx_ratio, error5xx_ratio,
-                unique_url_count, unique_user_count
+               event_count, error4xx_ratio, error5xx_ratio,
+               unique_url_count, unique_user_count
         FROM feature_rollup_5m
         WHERE ml_processed IS NOT TRUE
           AND event_count IS NOT NULL
@@ -121,7 +121,7 @@ def run_iforest(conn, pipe, thresh):
         
     # 1. 특성(Features) 추출 및 파이프라인 적용 (스케일링 포함)
     feats = df[["event_count","error4xx_ratio","error5xx_ratio",
-                 "unique_url_count","unique_user_count"]].values
+                "unique_url_count","unique_user_count"]].values
     # 파이프라인의 각 단계(scaler, iforest)를 명시적으로 호출하여 결정 점수(decision_function) 계산
     scores = pipe.named_steps["iforest"].decision_function(pipe.named_steps["scaler"].transform(feats))
     
@@ -200,9 +200,9 @@ def run_ewma(conn):
         with conn.cursor() as cur:
             # 중복 이벤트 삽입 방지 확인
             cur.execute("""
-                 SELECT COUNT(*) AS cnt
-                   FROM feature_rollup_1h
-                  WHERE window_start=%s AND ewma_anomaly IS TRUE
+                    SELECT COUNT(*) AS cnt
+                       FROM feature_rollup_1h
+                      WHERE window_start=%s AND ewma_anomaly IS TRUE
             """, (last,))
             
             # 이미 처리된 이상 징후가 아니면 (멱등성 보장)

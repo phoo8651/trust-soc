@@ -12,7 +12,7 @@ from db import get_db
 router = APIRouter()
 
 _SIGNING_VERSION = "v0"
-_MAX_TS_SKEW = 60 * 5  # 5 minutes
+_MAX_TS_SKEW = 60 * 5  
 
 
 @router.post("/webhook/slack")
@@ -51,5 +51,5 @@ async def slack_callback(
 
     payload = json.loads(body_text) if body_text else {}
 
-    # TODO: Persist approval decisions and emit audit trail entries.
+    
     return {"status": "ok", "received": payload.get("type", "unknown")}
