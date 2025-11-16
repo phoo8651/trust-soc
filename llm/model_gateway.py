@@ -1,127 +1,78 @@
-# llm/model_gateway.py
-import os
 import time
-import asyncio
-import requests
-import json
-from llm.local_llm_PoC import DummyLocalLLM, LocalLlamaLLM
-from llm.masking.data_masking import validate_masked
+import logging
+from typing import Dict, Any, Optional
 
+# 로컬 LLM 모듈 (llama.cpp 기반)
+from llm.local_llm_PoC import LocalLlamaLLM
 
-class CircuitBreaker:
-    def __init__(self, failure_threshold: int = 3, reset_timeout: int = 60):
-        self.failure_threshold = failure_threshold
-        self.reset_timeout = reset_timeout
-        self.fail_count = 0
-        self.opened_at = None
-
-    def record_failure(self):
-        self.fail_count += 1
-        if self.fail_count >= self.failure_threshold:
-            self.opened_at = time.time()
-
-    def record_success(self):
-        self.fail_count = 0
-        self.opened_at = None
-
-    def is_open(self) -> bool:
-        if self.opened_at is None:
-            return False
-        if (time.time() - self.opened_at) > self.reset_timeout:
-            self.fail_count = 0
-            self.opened_at = None
-            return False
-        return True
-
-
-class AsyncRateLimiter:
-    def __init__(self, max_concurrent: int = 4):
-        self._sem = asyncio.Semaphore(max_concurrent)
-
-    async def __aenter__(self):
-        await self._sem.acquire()
-
-    async def __aexit__(self, exc_type, exc, tb):
-        self._sem.release()
+# 로그 설정
+logger = logging.getLogger("ModelGateway")
+logger.setLevel(logging.INFO)
 
 
 class ModelGateway:
     """
-    외부 API → 로컬 LLM 폴백 구조
+    LLM 호출 게이트웨이
+    - 기본: 로컬 LLM(gguf) 실행
+    - 실패 시 fallback 더미 모델 호출 가능
+    - 모델 호출 성능 모니터링(metrics logging)
     """
-    def __init__(self, external_api_url=None, external_api_key=None, local_model_path=None, use_real_llm=False):
-        self.external_api_url = external_api_url or os.getenv("EXTERNAL_API_URL")
-        self.external_api_key = external_api_key or os.getenv("EXTERNAL_API_KEY")
-        self.allowlist = os.getenv("ALLOWED_MODELS", "gpt-4o-mini").split(",")
-        self.use_fake_external = bool(int(os.getenv("USE_FAKE_EXTERNAL", "0")))
-        self.circuit = CircuitBreaker()
-        self.rate_limiter = AsyncRateLimiter()
-        self.timeout = int(os.getenv("GATEWAY_TIMEOUT", 15))
 
-        # LLM 선택
-        if use_real_llm or bool(int(os.getenv("USE_REAL_LLM", "0"))):
-            self.local = LocalLlamaLLM(model_path=local_model_path)
+    def __init__(
+        self,
+        local_model_path: str,   # GGUF 모델 파일 경로
+        use_real_llm: bool = True,  # 실제 LLM 사용할지 여부
+        enable_fallback: bool = True,  # 실패 시 더미 모델 fallback
+        monitoring_enabled: bool = True,  # 성능 로그 기록 여부
+        timeout: float = 20  # 최대 응답 대기 시간
+    ):
+        self.timeout = timeout
+        self.enable_fallback = enable_fallback
+        self.monitoring_enabled = monitoring_enabled
+
+        # 실제 모델 사용 여부에 따라 로드
+        if use_real_llm:
+            logger.info(f"🔹 Local LLM 모델 로드: {local_model_path}")
+            self.llm = LocalLlamaLLM(model_path=local_model_path)
         else:
-            self.local = DummyLocalLLM(model_path=local_model_path)
+            logger.info("⚙ DummyLocalLLM 사용")
+            from llm.local_llm_PoC import DummyLocalLLM
+            self.llm = DummyLocalLLM()
 
-    async def _call_external(self, prompt: str, model: str = None) -> str:
-        if self.use_fake_external:
-            await asyncio.sleep(0.2)
-            return json.dumps({
-                "summary": "모의 요약",
-                "attack_mapping": ["T9999"],
-                "recommended_actions": ["모의 조치"],
-                "confidence": 0.9,
-                "hil_required": False
-            })
+    # ---------------------------------------------------------
+    #  모델 호출 함수 (비동기)
+    # ---------------------------------------------------------
+    async def generate(self, prompt: str) -> str:
+        """
+        LLM 모델 호출
+        - 오류 발생 시 fallback 처리
+        """
+        start = time.time()
 
-        if self.circuit.is_open():
-            raise RuntimeError("External circuit open")
+        try:
+            output = self.llm.generate(prompt)
 
-        model = model or self.allowlist[0]
+        except Exception as e:
+            logger.warning(f"❌ Local LLM 실행 실패: {e}")
 
-        def do_call():
-            headers = {"Authorization": f"Bearer {self.external_api_key}"} if self.external_api_key else {}
-            payload = {"model": model, "messages": [{"role": "user", "content": prompt}]}
-            resp = requests.post(self.external_api_url, headers=headers, json=payload, timeout=self.timeout)
-            resp.raise_for_status()
-            return resp.json()
-
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, do_call)
-
-        choices = result.get("choices", [])
-        if choices:
-            return choices[0].get("message", {}).get("content", "") or choices[0].get("text", "")
-        return ""
-
-    async def _call_local(self, prompt: str) -> str:
-        # 동기 LLM도 항상 await 가능하도록 run_in_executor로 감싸기
-        loop = asyncio.get_event_loop()
-        if asyncio.iscoroutinefunction(self.local.generate):
-            return await self.local.generate(prompt)
-        else:
-            return await loop.run_in_executor(None, self.local.generate, prompt)
-
-    async def generate(self, prompt: str, prefer_external: bool = True) -> str:
-        async with self.rate_limiter:
-            if not validate_masked(prompt):
-                raise ValueError("Prompt failed masking validation")
-
-            # 외부 API 우선
-            if prefer_external and self.external_api_url:
-                try:
-                    text = await self._call_external(prompt)
-                    self.circuit.record_success()
-                    return text
-                except Exception as e:
-                    self.circuit.record_failure()
-                    print(f"[gateway] External call failed: {e}. Falling back to local.")
-
-            # 로컬 LLM
-            try:
-                text = await self._call_local(prompt)
-                return text
-            except Exception as e:
-                print(f"[gateway] Local model failed: {e}")
+            if not self.enable_fallback:
                 raise
+
+            # fallback: DummyLocalLLM 사용
+            logger.info("⚠ Dummy 모델로 Fallback 처리")
+            from llm.local_llm_PoC import DummyLocalLLM
+            dummy = DummyLocalLLM()
+            output = dummy.generate(prompt)
+
+        # 성능 로그 기록
+        duration = time.time() - start
+        if self.monitoring_enabled:
+            self.log_metrics(tokens_used=len(prompt), duration=duration)
+
+        return output
+
+    # ---------------------------------------------------------
+    #  Metric Logging (토큰수 및 응답 시간 측정)
+    # ---------------------------------------------------------
+    def log_metrics(self, tokens_used: int, duration: float):
+        logger.info(f"📊 [Metrics] 사용 토큰수={tokens_used}, 응답시간={duration:.2f}초")
