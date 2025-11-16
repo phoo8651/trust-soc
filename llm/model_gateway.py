@@ -3,9 +3,10 @@ import os
 import time
 import asyncio
 import requests
-from typing import Optional
-from llm.local_llm_PoC import DummyLocalLLM
+import json
+from llm.local_llm_PoC import DummyLocalLLM, LocalLlamaLLM
 from llm.masking.data_masking import validate_masked
+
 
 class CircuitBreaker:
     def __init__(self, failure_threshold: int = 3, reset_timeout: int = 60):
@@ -32,49 +33,40 @@ class CircuitBreaker:
             return False
         return True
 
+
 class AsyncRateLimiter:
     def __init__(self, max_concurrent: int = 4):
         self._sem = asyncio.Semaphore(max_concurrent)
 
     async def __aenter__(self):
         await self._sem.acquire()
+
     async def __aexit__(self, exc_type, exc, tb):
         self._sem.release()
 
+
 class ModelGateway:
-   ''' def __init__(self,
-                 external_api_url: Optional[str] = None,
-                 external_api_key: Optional[str] = None,
-                 local_model_path: Optional[str] = None,
-                 allowlist: Optional[list] = None):
+    """
+    외부 API → 로컬 LLM 폴백 구조
+    """
+    def __init__(self, external_api_url=None, external_api_key=None, local_model_path=None, use_real_llm=False):
         self.external_api_url = external_api_url or os.getenv("EXTERNAL_API_URL")
         self.external_api_key = external_api_key or os.getenv("EXTERNAL_API_KEY")
-        self.allowlist = allowlist or os.getenv("ALLOWED_MODELS", "gpt-4o-mini").split(",")
+        self.allowlist = os.getenv("ALLOWED_MODELS", "gpt-4o-mini").split(",")
+        self.use_fake_external = bool(int(os.getenv("USE_FAKE_EXTERNAL", "0")))
         self.circuit = CircuitBreaker()
         self.rate_limiter = AsyncRateLimiter()
-        self.local = DummyLocalLLM(model_path=local_model_path)
         self.timeout = int(os.getenv("GATEWAY_TIMEOUT", 15))
 
-    async def _call_external(self, prompt: str, model: str = None) -> str:
-        if self.circuit.is_open():
-            raise RuntimeError("External circuit open")
-        model = model or self.allowlist[0]
-'''
-class ModelGateway:
-    def __init__(self, external_api_url=None, external_api_key=None, local_model_path=None, allowlist=None):
-        self.external_api_url = external_api_url or os.getenv("EXTERNAL_API_URL")
-        self.external_api_key = external_api_key or os.getenv("EXTERNAL_API_KEY")
-        self.allowlist = allowlist or os.getenv("ALLOWED_MODELS", "gpt-4o-mini").split(",")
-        self.use_fake_external = bool(int(os.getenv("USE_FAKE_EXTERNAL", "0")))  # 추가
-        self.circuit = CircuitBreaker()
-        self.rate_limiter = AsyncRateLimiter()
-        self.local = DummyLocalLLM(model_path=local_model_path)
-        self.timeout = int(os.getenv("GATEWAY_TIMEOUT", 15))
+        # LLM 선택
+        if use_real_llm or bool(int(os.getenv("USE_REAL_LLM", "0"))):
+            self.local = LocalLlamaLLM(model_path=local_model_path)
+        else:
+            self.local = DummyLocalLLM(model_path=local_model_path)
 
     async def _call_external(self, prompt: str, model: str = None) -> str:
         if self.use_fake_external:
-            # 외부 API 모킹
-            await asyncio.sleep(0.2)  # 딜레이 모사
+            await asyncio.sleep(0.2)
             return json.dumps({
                 "summary": "모의 요약",
                 "attack_mapping": ["T9999"],
@@ -82,6 +74,12 @@ class ModelGateway:
                 "confidence": 0.9,
                 "hil_required": False
             })
+
+        if self.circuit.is_open():
+            raise RuntimeError("External circuit open")
+
+        model = model or self.allowlist[0]
+
         def do_call():
             headers = {"Authorization": f"Bearer {self.external_api_key}"} if self.external_api_key else {}
             payload = {"model": model, "messages": [{"role": "user", "content": prompt}]}
@@ -92,22 +90,25 @@ class ModelGateway:
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(None, do_call)
 
-        # OpenAI 형식에서 텍스트 추출
         choices = result.get("choices", [])
         if choices:
             return choices[0].get("message", {}).get("content", "") or choices[0].get("text", "")
         return ""
 
     async def _call_local(self, prompt: str) -> str:
+        # 동기 LLM도 항상 await 가능하도록 run_in_executor로 감싸기
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self.local.generate, prompt)
+        if asyncio.iscoroutinefunction(self.local.generate):
+            return await self.local.generate(prompt)
+        else:
+            return await loop.run_in_executor(None, self.local.generate, prompt)
 
     async def generate(self, prompt: str, prefer_external: bool = True) -> str:
-        """외부 API 우선, 실패 시 로컬 fallback"""
         async with self.rate_limiter:
             if not validate_masked(prompt):
                 raise ValueError("Prompt failed masking validation")
 
+            # 외부 API 우선
             if prefer_external and self.external_api_url:
                 try:
                     text = await self._call_external(prompt)
@@ -117,7 +118,7 @@ class ModelGateway:
                     self.circuit.record_failure()
                     print(f"[gateway] External call failed: {e}. Falling back to local.")
 
-            # 로컬 폴백
+            # 로컬 LLM
             try:
                 text = await self._call_local(prompt)
                 return text

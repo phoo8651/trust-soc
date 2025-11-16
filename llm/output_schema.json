@@ -17,7 +17,7 @@
           "length": {"type": "integer"},
           "sha256": {"type": "string"},
           "rule_id": {"type": "string"}
-        },z
+        },
         "required": ["type", "ref_id", "source", "offset", "length", "sha256"]
       }
     },

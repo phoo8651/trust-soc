@@ -1,39 +1,74 @@
-# llm/rag/rag_engine.py -> RAG 엔진(증거 수집 및 Top-K 선정)
-from typing import List, Dict, Any
-from .vector_adapter import VectorAdapter, InMemoryAdapter
-from .chunker import chunk_logs_by_lines
+# llm/rag/rag_engine.py
+"""
+RAG 엔진 통합 버전
+- chunking
+- embedding
+- 벡터 인덱스 생성
+- 검색 + recency score
+"""
+
 import time
+from typing import List, Dict
+
+from llm.rag.chunker import chunk_text_by_chars, chunk_logs_by_lines
+from llm.rag.vector_adapter import VectorAdapter
+from llm.embeddings import Embedder
+
 
 class RAGEngine:
-    def __init__(self, adapter: VectorAdapter):
-        self.adapter = adapter
+    def __init__(self, model_name="all-MiniLM-L6-v2"):
+        self.embedder = Embedder()
+        self.docs: List[str] = []
+        self.metadata: List[Dict] = []
+        self.adapter = None
+        self.model_name = model_name
 
-    def index_logs(self, doc_id: str, lines: List[str], embed_fn):
-        chunks = chunk_logs_by_lines(lines)
-        docs_to_add = []
-        now_ts = int(time.time())
-        for c in chunks:
-            vec = embed_fn(c["text"])
-            docs_to_add.append({
-                "id": f"{doc_id}:{c['id']}",
-                "embedding": vec,
-                "metadata": {"doc_id": doc_id, "ts": now_ts, "start": c["start"], "end": c["end"]},
-                "text": c["text"]
+    def index_documents(self, doc_id: str, text: str, mode="text"):
+        """
+        doc_id: 문서 또는 로그 ID
+        text: 원본 문서
+        mode: "text" | "log"
+        """
+        ts = int(time.time())
+
+        if mode == "text":
+            chunks = chunk_text_by_chars(text, max_chars=800)
+        else:
+            chunks = chunk_logs_by_lines(text, max_lines=20)
+
+        for ch in chunks:
+            self.docs.append(ch)
+            self.metadata.append({
+                "doc_id": doc_id,
+                "ts": ts,
+                "text": ch,
             })
-        self.adapter.add(docs_to_add)
 
-    def retrieve(self, query: str, embed_fn, k: int = 5, recency_weight: float = 0.2):
-        q_vec = embed_fn(query)
-        hits = self.adapter.search(q_vec, k=k*3)  # overfetch
-        # apply recency weighting
-        scored = []
+        # Build vector index
+        self.adapter = VectorAdapter(self.docs, model_name=self.model_name)
+
+    def retrieve(self, query: str, top_k=5, recency_weight=0.2) -> List[Dict]:
+        if not self.adapter:
+            return []
+
+        results = self.adapter.search(query, top_k=top_k * 3)
         now = int(time.time())
-        for h in hits:
-            base = float(h["score"])
-            ts = h.get("metadata", {}).get("ts", now)
-            age = max(1, now - ts)
-            recency_bonus = recency_weight * (1.0 / (age/3600 + 1))
-            final = base + recency_bonus
-            scored.append({**h, "final_score": final})
+        scored = []
+
+        for rank, (idx, score) in enumerate(results):
+            meta = self.metadata[idx]
+            age = max(1, now - meta["ts"])
+            recency_bonus = recency_weight * (1.0 / (age / 3600 + 1))
+            final_score = score + recency_bonus
+
+            scored.append({
+                "rank": rank,
+                "score": score,
+                "final_score": final_score,
+                "doc_id": meta["doc_id"],
+                "text": meta["text"],
+                "ts": meta["ts"],
+            })
+
         scored.sort(key=lambda x: x["final_score"], reverse=True)
-        return scored[:k]
+        return scored[:top_k]

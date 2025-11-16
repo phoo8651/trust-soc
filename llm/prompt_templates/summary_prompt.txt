@@ -1,51 +1,47 @@
 You are a SOC assistant.
 Analyze the following security event and evidences, then return a strictly valid JSON following the output schema.
 
+당신의 임무는 반드시 JSON만 출력하는 것입니다.
+절대 JSON 외의 내용은 출력하지 마십시오.
+설명, 해설, 말머리, 자연어 문장, 불필요한 텍스트는 절대 출력하지 마십시오.
+
+반드시 다음 JSON 스키마를 따르십시오:
+
+{
+  "summary": "string",
+  "attack_mapping": ["string"],
+  "recommended_actions": ["string"],
+  "confidence": "number(0.0~1.0)",
+  "hil_required": "boolean",
+  "evidence_refs": [
+    {
+      "type": "raw | yara | hex | webhook",
+      "ref_id": "string",
+      "source": "string",
+      "offset": "integer",
+      "length": "integer",
+      "sha256": "string",
+      "rule_id": "string(optional)"
+    }
+  ]
+}
+
+Strict JSON output rules:
+1. JSON 이외의 문자를 절대 넣지 마십시오.
+2. 모든 필드는 반드시 포함해야 합니다.
+3. attack_mapping / recommended_actions / evidence_refs 는 항상 배열이어야 합니다.
+4. attack_mapping, recommended_actions 가 불명확하더라도 빈 배열은 금지하며 ["모른다"] 를 사용하십시오.
+5. confidence 값이 불확실하면 0.0 을 사용하십시오.
+6. hil_required 값이 불확실하면 false 를 사용하십시오.
+7. JSON 은 반드시 `{` 로 시작하고 `}` 로 끝나야 합니다.
+8. JSON 내부에 주석(//, #) 또는 backtick(```) 을 넣지 마십시오.
+10. Summary와 attack_mapping은 반드시 event_text 내용을 기반으로 해야 하며,event_text에 없는 내용은 절대 생성하지 마십시오.
+
 Event text:
 {event_text}
 
 Evidences:
 {evidence_block}
 
-Instructions for JSON output:
-- Return a JSON object with all fields present.
-- "summary": a short summary of the incident (string).
-- "attack_mapping": a non-empty array of strings. If unknown, use ["모른다"].
-- "recommended_actions": a non-empty array of strings. If unknown, use ["모른다"].
-- "confidence": a number between 0.0 and 1.0. If unsure, use 0.0.
-- "hil_required": a boolean. If unsure, use false.
-- "evidence_refs": an array of objects with the following fields:
-    - type: one of ["raw", "yara", "hex", "webhook"]
-    - ref_id: string
-    - source: string
-    - offset: integer
-    - length: integer
-    - sha256: string
-    - rule_id: string (optional)
-
-Strict rules:
-1. Do not return any extra fields.
-2. Maintain proper types (string, number, boolean, array).
-3. Always return arrays for "attack_mapping", "recommended_actions", and "evidence_refs".
-4. Use ["모른다"] instead of empty lists or strings for unknown lists.
-5. JSON must be parsable; do not include comments or Python-style structures.
-
-Example JSON output (replace values as appropriate):
-{{
-  "summary": "사건 요약",
-  "attack_mapping": ["모른다"],
-  "recommended_actions": ["모른다"],
-  "confidence": 0.0,
-  "hil_required": false,
-  "evidence_refs": [
-    {{
-      "type": "raw",
-      "ref_id": "log_001",
-      "source": "example.log",
-      "offset": 0,
-      "length": 100,
-      "sha256": "a1b2c3d4e5f6",
-      "rule_id": "R001"
-    }}
-  ]
-}}
+이제 위 정보를 기반으로 스키마에 맞는 JSON만 출력하십시오.
+출력의 첫 문자는 반드시 `{` 이어야 하며 마지막 문자는 `}` 이어야 합니다.
