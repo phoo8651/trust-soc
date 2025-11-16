@@ -4,6 +4,7 @@ import json, jsonschema, asyncio, re, logging
 from pathlib import Path
 import os
 import traceback
+from string import Template
 
 # -------------------------
 # 내부 모듈 import
@@ -97,17 +98,32 @@ def validate_evidence_refs(evidences: list):
 # 프롬프트 빌드
 # -------------------------
 def build_prompt(name: str, event_text: str, evidences: list, extra=None):
+    """
+    summary_prompt.txt의 placeholder 구조에 맞게 프롬프트 생성
+    {event_text}, {evidence_block} 두 필드만 사용
+    """
     tpl = prompt_manager.load_prompt(name)
+
+    # evidence_block 구성
     evidence_block = "\n".join(
-        f"ref_id: {e['ref_id']}\ntype: {e['type']}\nsource: {e['source']}\nsha256: {e.get('sha256', '')}\nsnippet: \"{e.get('snippet', '')}\"\n---"
+        f"- ref_id: {e.get('ref_id', '')}\n"
+        f"  type: {e.get('type', '')}\n"
+        f"  source: {e.get('source', '')}\n"
+        f"  sha256: {e.get('sha256', '')}\n"
+        f"  snippet: {e.get('snippet', '')}\n"
+        f"  ---"
         for e in evidences
     )
-    return tpl.format(
-        event_text=event_text,
-        evidence_block=evidence_block,
-        attack_mapping_json=extra or "[]"
-    )
 
+    # Template.safe_substitute() 사용으로 중괄호 이슈 방지
+    try:
+        template = Template(tpl)
+        return template.safe_substitute(event_text=event_text, evidence_block=evidence_block)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Prompt formatting failed: {str(e)}"
+        )
 # -------------------------
 # 인시던트 저장소 (임시 메모리)
 # -------------------------
@@ -149,7 +165,7 @@ async def analyze_log(payload: dict):
                 raw_response = await model_gateway.generate(prompt)
             else:
                 # DummyLocalLLM는 동기 함수
-                raw_response = model_gateway.generate(prompt)
+                raw_response = await model_gateway.generate(prompt)
         except Exception as e:
             logger.warning(f"⚠️ Local LLM 실패: {e} → Gateway로 재시도")
             gw = ModelGateway(local_model_path="models/ggml.bin")

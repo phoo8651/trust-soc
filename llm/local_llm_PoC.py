@@ -1,5 +1,5 @@
 # llm/locol_llm.PoC.py
-from llama_cpp import Llama
+'''from llama_cpp import Llama
 
 
 MODEL_PATH = "C:/Users/ngh11/trust-soc/llm/models/mistral-7b-instruct-v0.2.Q4_K_M.gguf"
@@ -24,34 +24,83 @@ snippet: "payload contains eval() function"
 
 OUTPUT_SCHEMA:
 {
-  "summary": "",
-  "confidence_explanation": "",
-  "evidence_refs_used": []
+  "type": "object",
+  "properties": {
+    "summary": {"type": "string"},
+    "attack_mapping": {"type": "array", "items": {"type": "string"}},
+    "recommended_actions": {"type": "array", "items": {"type": "string"}},
+    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    "evidence_refs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": {"type": "string", "enum": ["raw", "yara", "hex", "webhook"]},
+          "ref_id": {"type": "string"},
+          "source": {"type": "string"},
+          "offset": {"type": "integer"},
+          "length": {"type": "integer"},
+          "sha256": {"type": "string"},
+          "rule_id": {"type": "string"}
+        },z
+        "required": ["type", "ref_id", "source", "offset", "length", "sha256"]
+      }
+    },
+    "hil_required": {"type": "boolean"}
+  },
+  "required": ["summary", "attack_mapping", "recommended_actions", "confidence", "evidence_refs", "hil_required"]
 }
+
+"""
+'''
+# llm/local_llm_PoC.py
+"""
+Dummy local LLM PoC for development.
+Provides async generate(prompt) -> JSON string.
 """
 
-print("🧠 LLM 응답 생성 중...")
-response = llm(prompt=prompt, max_tokens=256, temperature=0.7, stop=["</s>"])
-print(response["choices"][0]["text"])
-
 import json
+import asyncio
+from typing import Dict, Any
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 class DummyLocalLLM:
     def __init__(self, model_path: str = None):
         self.model_path = model_path
-        print(f"[DummyLocalLLM] model_path: {self.model_path}")
-        
-    def generate(self, prompt: str) -> str:
-        return json.dumps({
-        "summary": "모의 요약",
-        "attack_mapping": ["모름"],
-        "recommended_actions": ["모름"],
-        "confidence": 0.5,
-        "evidence_refs": [{"type":"raw","ref_id":"log_001","source":"auth.log","offset":0,"length":150,"sha256":"abc123"}],
-        "hil_required": False
-    })
+        logger.info(f"[DummyLocalLLM] model_path: {self.model_path}")
 
-    '''def generate(self, prompt: str) -> str:
-        # 단순히 프롬프트를 echo 하는 PoC 예시
-        return '{"summary": "모의 요약", "attack_mapping": ["모름"], "recommended_actions": ["모름"], "confidence": 0.5, "hil_required": false}'
-    '''
+    async def generate(self, prompt: str) -> str:
+        """
+        Simulated async generation. Returns a JSON string compatible with output_schema.json.
+        In real usage, call llama.cpp/MLC-LLM wrapper (async) here.
+        """
+        # simulate latency
+        await asyncio.sleep(0.05)
+        # produce predictable mock output (ensure evidence_refs present)
+        parsed: Dict[str, Any] = {
+            "summary": "모의 요약 (dummy)",
+            "attack_mapping": ["T1595"],
+            "recommended_actions": ["로그 모니터링 강화"],
+            "confidence": 0.5,
+            "evidence_refs": [
+                {
+                    "type": "raw",
+                    "ref_id": "log_001",
+                    "source": "auth.log",
+                    "offset": 0,
+                    "length": 100,
+                    "sha256": "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+                }
+            ],
+            "hil_required": False
+        }
+        return json.dumps(parsed)
+
+
+'''def generate(self, prompt: str) -> str:
+    # 단순히 프롬프트를 echo 하는 PoC 예시
+    return '{"summary": "모의 요약", "attack_mapping": ["모름"], "recommended_actions": ["모름"], "confidence": 0.5, "hil_required": false}'
+'''
