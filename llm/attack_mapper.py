@@ -1,42 +1,53 @@
 """
-MITRE ATT&CK 기반 매핑 엔진
-- 로그/증거에서 키워드 + 정규표현식 기반 탐지
-- confidence = 규칙 점수 + LLM confidence
+MITRE ATT&CK 기반 매핑 엔진 - 강화 버전
+- 키워드/정규표현식 기반 탐지 개선
+- SSH 브루트포스 등 패턴 확장
+- confidence 기반 우선 매핑
 """
-import json
 import re
-from pathlib import Path
-
-DB_PATH = Path(__file__).resolve().parent / "attack_db" / "enterprise_techniques.json"
-
-KEYWORD_RULES = {
-    r"failed login|authentication failed|brute.*force": "T1110",
-    r"powershell|execution policy": "T1059",
-    r"mimikatz|credential dump": "T1003",
-    r"sql injection|db error": "T1190",
-    r"exfil": "T1041",
-}
 
 class AttackMapper:
     def __init__(self):
-        self.db = json.loads(DB_PATH.read_text(encoding="utf-8"))
-
-    def get_by_id(self, tid: str):
-        return next((i for i in self.db if i["id"] == tid), None)
+        self.rules = [
+            {
+                "id": "T1110.001",
+                "name": "Brute Force - Password Guessing",
+                "patterns": [
+                    r"failed ssh",
+                    r"ssh login failed",
+                    r"authentication failed",
+                    r"failed password",
+                    r"password authentication failed",
+                    r"invalid user",
+                    r"too many authentication failures",
+                    r"brute",
+                ],
+                "confidence": 0.85,
+            },
+            {
+                "id": "T1110",
+                "name": "Brute Force",
+                "patterns": [
+                    r"ssh",
+                    r"login",
+                    r"password",
+                ],
+                "confidence": 0.60,
+            }
+        ]
 
     def map(self, event_text: str, evidences: list):
-        text = event_text.lower() + " ".join(
-            e.get("snippet", "").lower() for e in evidences
-        )
+        results = []
+        text = event_text.lower()
 
-        matched = []
-        for pat, tid in KEYWORD_RULES.items():
-            if re.search(pat, text):
-                info = self.get_by_id(tid)
-                matched.append({
-                    "id": tid,
-                    "name": info.get("name") if info else tid,
-                    "score": 1.0  # 기본 점수
-                })
+        for rule in self.rules:
+            for p in rule["patterns"]:
+                if re.search(p, text):
+                    results.append({
+                        "ttp_id": rule["id"],
+                        "confidence": rule["confidence"]
+                    })
+                    break
 
-        return matched
+        results.sort(key=lambda x: x["confidence"], reverse=True)
+        return results
