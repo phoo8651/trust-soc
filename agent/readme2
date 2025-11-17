@@ -1,79 +1,155 @@
-# Secure Log Agent PoC (Week 3 Scope)
-
-## 1. Goals
-
+# Secure Log Agent PoC
+1. Goals
 - 애플리케이션/NGINX 로그를 안전하게 중앙으로 전송
 - 에이전트 코드/서비스를 직접 수정하지 않고, 중앙에서 정책/명령 제어
 - 토큰/시크릿 분리, 재전송 방지(HMAC), 최소 권한(systemd 하드닝) 적용
+- 새 VM 환경에서도 스크립트 한 번으로 에이전트 스택 설치/등록 가능하게 만들기
+---
+2. Architecture Overview
 
-## 2. Architecture Overview
+2.1 OTEL Agent (`otel-agent`)
+- OpenTelemetry Collector 기반 로그 에이전트
+- `filelog` receiver로 `/var/log/nginx/access.log` 수집
+- `transform/pii_mask` 로 기본 PII(IP 등) 마스킹
+- `batch`, `file_storage`, `queued_retry` 로 무손실/재시도 보장
+- OTLP/HTTP exporter:
+  - endpoint: `http://127.0.0.1:19000/v1/logs` (Secure Forwarder)
+  - token: `LOCAL_TOKEN` (에이전트 전용 토큰)
+- 실행:
+  - 시스템 계정: `otel-agent`
+  - 설정: `/etc/secure-log-agent/agent.yaml`
+  - remote 설정: `/etc/secure-log-agent/remote.d/remote.yaml`
 
-1. **otel-agent (OpenTelemetry Collector)**
-   - `filelog` receiver로 `/var/log/nginx/access.log` 수집
-   - `transform/pii_mask` 로 민감 정보 마스킹 (예: IP)
-   - `batch`, `file_storage`, `queued_retry` 로 무손실/재시도 보장
-   - OTLP/HTTP exporter:
-     - endpoint: `http://127.0.0.1:19000/v1/logs` (Secure Forwarder)
-     - token: `LOCAL_TOKEN` (에이전트 전용 토큰)
+2.2 Secure Forwarder
+- 위치: `~/lastagent/forwarder/secure-forwarder.py`
+- 역할:
+  - 로컬에서 `/v1/logs` 수신
+  - `Authorization: Bearer LOCAL_TOKEN` 검증
+  - 중앙 Ingest 서버로 포워딩:
+    - `Authorization: Bearer LOG_TOKEN`
+    - `X-Request-Timestamp`, `X-Nonce`, `X-Idempotency-Key`,
+      `X-Payload-Hash`, `X-Signature` (HMAC-SHA256) 추가
+  - 로컬 에이전트와 중앙 서버 사이의 HMAC 게이트웨이 역할
 
-2. **Secure Forwarder (/opt/secure-forwarder)**
-   - 로컬에서 `/v1/logs` 수신
-   - `Authorization: Bearer LOCAL_TOKEN` 검증
-   - 중앙 Ingest 서버로 포워딩:
-     - `Authorization: Bearer LOG_TOKEN`
-     - `X-Request-Timestamp`, `X-Nonce`, `X-Idempotency-Key`,
-       `X-Payload-Hash`, `X-Signature` (HMAC-SHA256) 추가
-   - 역할: 로컬 에이전트와 중앙 서버 사이의 HMAC 게이트웨이
+2.3 Ingest & Control Server (PoC)
+- Ingest API (`/v1/logs`)
+  - `LOG_TOKEN` + HMAC 검증 후 로그 수신 (현재는 콘솔 출력)
+- Control API (에이전트 원격 명령 채널)
+  - `POST /api/agents/{id}/commands/enqueue`
+    - 내부 관리자/룰엔진이 사용하는 제어 엔드포인트
+    - `CTRL_TOKEN` 기반 인증
+  - `GET /api/agents/{id}/commands`
+    - Agent Controller가 pending 명령 조회
+    - `CTRL_TOKEN` + HMAC 검증
+  - `POST /api/agents/{id}/commands/{cmd_id}/ack`
+    - Agent Controller가 처리 결과 보고
+    - `CTRL_TOKEN` + HMAC 검증
+- 저장소는 메모리 기반 (PoC)
+  - 실서비스에서는 DB/Queue로 교체 예정
 
-3. **Ingest & Control Server (PoC)**
-   - `POST /v1/logs`
-     - `LOG_TOKEN` + HMAC 검증 후 로그 수신 (현재는 콘솔 출력)
-   - `POST /api/agents/{id}/commands/enqueue`
-     - 내부 관리자/룰엔진이 사용하는 제어 엔드포인트
-     - `CTRL_TOKEN` 기반 인증
-   - `GET /api/agents/{id}/commands`
-     - Agent Controller가 pending 명령 조회
-     - `CTRL_TOKEN` + HMAC 검증
-   - `POST /api/agents/{id}/commands/{cmd_id}/ack`
-     - Agent Controller가 처리 결과 보고
-     - `CTRL_TOKEN` + HMAC 검증
-   - 저장소는 메모리 기반 (PoC) → 실서비스에서는 DB/Queue로 교체
+2.4 Agent Controller
+- 위치: `~/lastagent/agent/agent_controller.py`
+- systemd 서비스로 상시 동작
+- 주기적으로 Control Server에서 명령 pull
+- 지원 명령:
+  - `ping` : 연결 확인
+  - `reload_agent` : `systemctl restart otel-agent`
+  - `update_config` :
+    - `/etc/secure-log-agent/remote.d/remote.yaml` 생성/갱신
+    - `systemctl reload otel-agent`
+- 모든 호출에 `CTRL_TOKEN` + HMAC-SHA256 사용
 
-4. **Agent Controller (/opt/agent-controller)**
-   - systemd 서비스로 상시 동작
-   - 주기적으로 Control Server에서 명령 pull
-   - 지원 명령:
-     - `ping` : 연결 확인
-     - `reload_agent` : `systemctl restart otel-agent`
-     - `update_config` :
-       - `/etc/secure-log-agent/remote.d/remote.yaml` 생성/갱신
-       - `systemctl reload otel-agent`
-   - 모든 호출에 `CTRL_TOKEN` + HMAC-SHA256 사용
+3. Repository & Runtime Layout
+!기본 예시는 `last` 계정, `/home/last/lastagent` 기준입니다.
 
-## 3. Security Design
+```bash
+/home/last/lastagent
+├── agent/
+│   ├── agent_controller.py
+│   └── agent-controller.service        # systemd 유닛 템플릿
+├── forwarder/
+│   ├── secure-forwarder.py
+│   └── secure-forwarder.service        # systemd 유닛 템플릿
+├── etc/
+│   ├── agent.yaml                      # OTEL 에이전트 메인 설정
+│   ├── .env                            # 토큰/URL/HMAC 등 시크릿 (git ignore 대상)
+│   └── otel-agent.service              # OTEL 에이전트 systemd 유닛 템플릿
+├── venv/                               # Python 가상환경 (install 스크립트가 생성)
+└── install_lastagent.sh                # 자동 설치 스크립트
 
-- **Token Separation**
-  - `LOCAL_TOKEN` : otel-agent -> Secure Forwarder (호스트 내부)
-  - `LOG_TOKEN`   : Secure Forwarder -> Ingest (로그 채널)
-  - `CTRL_TOKEN`  : Agent Controller/관리자 -> Control API (제어 채널)
-- **HMAC Protection**
-  - 로그 포워딩 및 제어 플레인에 대해
-    - `X-Request-Timestamp`, `X-Nonce`, `X-Payload-Hash`, `X-Signature`
-    - 재전송 공격 및 payload 변조 방지
-- **Secrets Management**
-  - 모든 토큰/HMAC 키는 systemd `Environment=`로 주입
-  - 설정 파일(agent.yaml 등)에 시크릿 직접 기록 금지
-- **Systemd Hardening**
-  - `NoNewPrivileges`, `ProtectSystem=full`, `RestrictSUIDSGID`,
-    `ProtectKernel*`, `RestrictNamespaces`, `RestrictAddressFamilies` 등 적용
-  - 필요한 디렉터리만 `ReadWritePaths`로 허용
-- **Least Privilege**
-  - otel-agent: `otel-agent` 전용 계정으로 실행
-  - secure-forwarder, agent-controller: root이지만 sandbox 옵션으로 제한
-    (실운영 시 sudo 정책/전용 계정으로 더 분리 가능)
+4. New VM Setup (새 VM에 에이전트 스택 설치하기)
 
-## 4. Next Steps (Beyond Week 3)
+이 섹션은 **새로운 VM에 Secure Log Agent 스택을 올릴 때 필요한 전체 단계**를 정리합니다.
 
-- Ingest/Control Server를 실제 DB/Rule Engine과 연동
-- 에이전트 토큰 발급/회전 API 및 콘솔
-- 추가 PII redaction 규칙, multi-tenant RBAC 적용
+> 기본 예시는 `last` 계정, `/home/last/lastagent` 경로 기준입니다.  
+> 다른 계정/경로를 사용할 경우 4.3 항목을 참고해 변수를 수정하면 됩니다.
+
+
+
+4.1 사전 조건 (Prerequisites)
+
+- OS: Ubuntu 계열 (systemd + apt 사용)
+- root 또는 sudo 권한
+- VM에서 Ingest/Control 서버로 HTTP(S) 통신 가능해야 함
+- OpenTelemetry Collector 바이너리(`otelcol-contrib`)는 별도로 설치해둔다  
+  (패키지/압축본 등 환경에 맞게 설치, `ExecStart=/usr/local/bin/otelcol-contrib` 기준)
+
+
+
+ 4.2 기본 설치 플로우 (last 계정 / `/home/last/lastagent` 기준)
+
+1) **코드 배포**
+
+```bash
+#1. last 계정으로 로그인 후
+sudo useradd -m last        # 이미 있으면 생략
+sudo su - last
+
+#2.리포지토리 배포
+cd ~
+git clone <THIS_REPO_URL> lastagent   # 또는 scp로 ~/lastagent 에 업로드
+cd ~/lastagent
+
+4.3 환경변수 파일(.env) 작성
+
+cd ~/lastagent
+
+# 예시 템플릿이 있으면 복사
+cp etc/.env.example etc/.env   # 없으면 이 줄은 생략
+
+# 실제 값 입력
+nano etc/.env
+
+최소 예시(.env)
+# Secure Forwarder
+LOCAL_TOKEN=dev_agent_token
+UPSTREAM_URL=http://127.0.0.1:8000/v1/logs
+UPSTREAM_LOG_TOKEN=dev_log_token
+HMAC_SECRET=super_secret_hmac_key
+
+# OTEL Agent
+INGEST_ENDPOINT=http://127.0.0.1:19000
+INGEST_TOKEN=dev_agent_token
+
+# Agent Controller
+CONTROLLER_URL=http://127.0.0.1:8000
+AGENT_TOKEN=dev_ctrl_token
+AGENT_ID=agent-01
+POLL_INTERVAL=5
+
+5.설치 스크립트 실행
+cd ~/lastagent
+chmod +x install_lastagent.sh     # (한 번만)
+sudo ./install_lastagent.sh       # 또는 sudo bash ./install_lastagent.sh
+
+
+6.설치 실행후 상태확인
+# 서비스 상태
+sudo systemctl status secure-forwarder.service
+sudo systemctl status agent-controller.service
+sudo systemctl status otel-agent.service
+
+# 로그 실시간 확인
+sudo journalctl -fu secure-forwarder.service
+sudo journalctl -fu agent-controller.service
+sudo journalctl -fu otel-agent.service
