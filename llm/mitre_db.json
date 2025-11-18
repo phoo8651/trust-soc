@@ -1,0 +1,26 @@
+[
+  {
+    "id": "T1110.001",
+    "name": "Password Brute Force - Single Account",
+    "description": "Repeated login attempts to guess valid credentials.",
+    "examples": ["SSH brute-force", "RDP login attempts"],
+    "related_techniques": ["T1110.003"],
+    "platforms": ["Windows", "Linux"],
+    "detection_hints": [
+      "Multiple failed authentication attempts",
+      "Repeated access to same target from same source"
+    ]
+  },
+  {
+    "id": "T1053.005",
+    "name": "Scheduled Task - Windows",
+    "description": "Task scheduler used for persistence or lateral movement.",
+    "examples": ["schtasks.exe abuse"],
+    "related_techniques": ["T1053.003"],
+    "platforms": ["Windows"],
+    "detection_hints": [
+      "Creation of suspicious scheduled tasks",
+      "Unexpected scheduler configurations"
+    ]
+  }
+]

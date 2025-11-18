@@ -30,3 +30,9 @@ def apply_guardrail(confidence: float) -> str:
 
     logger.info(f"[Guardrail] confidence={confidence} → status={status}")
     return status
+
+
+def combine_conf(static_score=0.0, llm_score=0.0):
+    if static_score > 0:
+        return 0.7 * static_score + 0.3 * llm_score
+    return llm_score * 0.8

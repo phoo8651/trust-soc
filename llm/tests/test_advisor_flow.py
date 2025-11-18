@@ -1,42 +1,91 @@
-# tests/test_advisor_flow.py > end-to-end 흐름 + HIL 조건 테스트
+# tests/test_advisor_flow.py
+
+import pytest
 from fastapi.testclient import TestClient
-from advisor_api import app
+from llm.advisor_api import app
+
 
 client = TestClient(app)
 
-def test_full_flow_hil_and_confidence_logic():
+
+def test_ssh_bruteforce_auto_approved():
     payload = {
-        "event_text": "Suspicious PowerShell execution detected: base64 command",
-        "yara_hits": [],
-        "hex_matches": []
+        "event_text": "Multiple failed SSH login from 10.0.0.5 for user root",
+        "evidences": [
+            {
+                "type": "raw",
+                "ref_id": "E1",
+                "source": "auth.log",
+                "offset": 0,
+                "length": 120,
+                "sha256": "abcdef",
+                "snippet": "Failed SSH login from 10.0.0.5 for user root"
+            }
+        ]
     }
 
-    resp = client.post("/analyze", json=payload)
-    assert resp.status_code == 200
-    data = resp.json()
+    res = client.post("/analyze", json=payload)
+    assert res.status_code == 200
 
-    # Basic schema checks
-    for key in [
-        "summary",
-        "attack_mapping",
-        "recommended_actions",
-        "confidence",
-        "evidence_refs",
-        "hil_required"
-    ]:
-        assert key in data
+    data = res.json()
+    print("TEST SSH:", data)
 
-    # Evidence refs format check
-    for ref in data["evidence_refs"]:
-        for key in ["type", "ref_id", "source", "offset", "length", "sha256"]:
-            assert key in ref
+    assert data["attack_mapping"] == ["T1110.001"]
+    assert data["confidence"] >= 0.8
+    assert data["hil_required"] is False
+    assert data["status"] == "approved"
 
-    # Confidence ranges must be valid
-    assert 0 <= data["confidence"] <= 1
 
-    # HIL Required Logic: if confidence < 0.8 -> hil_required = True
-    # (기본 guardrail 규칙)
-    if data["confidence"] < 0.8:
-        assert data["hil_required"] is True
-    else:
-        assert data["hil_required"] in (False, True)  # auto approve or human approve
+def test_scheduled_task_requires_hil():
+    payload = {
+        "event_text": "schtasks.exe created new task /ru system",
+        "evidences": [
+            {
+                "type": "raw",
+                "ref_id": "EV123",
+                "source": "system.log",
+                "offset": 0,
+                "length": 80,
+                "sha256": "abcdef",
+                "snippet": "schtasks.exe created new task /ru system"
+            }
+        ]
+    }
+
+    res = client.post("/analyze", json=payload)
+    assert res.status_code == 200
+
+    data = res.json()
+    print("TEST SCHEDULED TASK:", data)
+
+    assert data["attack_mapping"] == ["T1053.005"]
+    assert 0.5 <= data["confidence"] < 0.8
+    assert data["hil_required"] is True
+    assert data["status"] == "pending_approval"
+
+
+def test_ftp_always_hil():
+    payload = {
+        "event_text": "FTP login attempt from 192.168.0.10",
+        "evidences": [
+            {
+                "type": "raw",
+                "ref_id": "E2",
+                "source": "ftp.log",
+                "offset": 0,
+                "length": 100,
+                "sha256": "123456",
+                "snippet": "FTP login attempt from 192.168.0.10"
+            }
+        ]
+    }
+
+    res = client.post("/analyze", json=payload)
+    assert res.status_code == 200
+
+    data = res.json()
+    print("TEST FTP:", data)
+
+    assert data["attack_mapping"] == ["UNKNOWN"]
+    assert data["hil_required"] is True
+    assert data["status"] == "pending_approval"

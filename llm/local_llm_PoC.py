@@ -42,62 +42,33 @@ class DummyLocalLLM:
 # ② LocalLlamaLLM: 실제 llama.cpp 모델 연결
 # -----------------------------------------------------
 class LocalLlamaLLM:
-    """
-    llama.cpp 기반 로컬 LLM 어댑터
-    """
-    def __init__(self, model_path: Optional[str] = None, n_ctx: int = 4096, n_threads: int = 8):
-        try:
-            from llama_cpp import Llama
-        except ImportError:
-            raise ImportError("llama-cpp-python 패키지를 설치해야 합니다: pip install llama-cpp-python")
-
-        self.model_path = model_path or os.environ.get(
-            "LLM_MODEL_PATH",
-            os.path.join("llm", "models", "mistral-7b-instruct-v0.2.Q4_K_M.gguf")
-        )
-
-        if not os.path.exists(self.model_path):
-            raise FileNotFoundError(f"LLM 모델 파일을 찾을 수 없습니다: {self.model_path}")
-
-        logger.info(f"[LocalLlamaLLM] Loading model from {self.model_path} ...")
+    def __init__(self, model_path=None):
+        from llama_cpp import Llama
+        
+        self.model_path = model_path
+        
         self.llm = Llama(
             model_path=self.model_path,
-            n_ctx=n_ctx,
-            n_threads=n_threads,
+            n_ctx=1024,   # ★ 1024
+            n_threads=4,  # ★ 4 threads only
             verbose=False
         )
-        logger.info("[LocalLlamaLLM] 모델 로드 완료")
 
-    def generate(self, prompt: str, max_tokens: int = 512, temperature: float = 0.7):
-    
+    def generate(self, prompt, max_tokens=256, temperature=0.0):
         logger.info("[LocalLlamaLLM] Generating with real model...")
-
-        output = self.llm(
-                prompt=prompt,
-                max_tokens=max_tokens,
-                temperature=0,
-                top_p=1.0,
-                repeat_penalty=1.1,
-                stop=["</s>"]
-            )
-        
-
-        text = output["choices"][0]["text"].strip()
-
-        # JSON 파싱 시도
         try:
-            parsed = json.loads(text)
-            return json.dumps(parsed, ensure_ascii=False)
+            output = self.llm(
+                prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=1.0,
+                stop=["}"]
+            )
+        except Exception as e:
+            logger.error(f"🔥 LocalLlamaLLM crashed: {e}")
+            raise
 
-        except json.JSONDecodeError:
-            logger.warning("[LocalLlamaLLM] ⚠️ JSON 파싱 실패. 기본 스키마로 자동 보정")
+        return output["choices"][0]["text"].strip()
 
-            return json.dumps({
-                "summary": text[:200],  # 원문 일부
-                "attack_mapping": [],
-                "recommended_actions": [],
-                "confidence": 0.0,
-                "evidence_refs": [],
-                "hil_required": True
-            }, ensure_ascii=False)
+
 

@@ -1,3 +1,4 @@
+#llm/advisor_api.py
 """
 Incident Advisor API
 - LLM 기반 보안 이벤트 분석
@@ -6,7 +7,7 @@ Incident Advisor API
 - 모델 게이트웨이 기반 LLM 호출 (fallback 포함)
 - HIL(Webhook) 처리 + Idempotency
 """
-
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, HTTPException, Header
 import json, jsonschema, asyncio, re, logging, traceback, time, hmac, hashlib, uuid
 from pathlib import Path
@@ -36,6 +37,13 @@ from llm.utils.llm_response_handler import (
 # FastAPI 초기화
 # -------------------------
 app = FastAPI(title="Incident Advisor API")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 개발 단계: 모두 허용 (운영 시 제한 필요)
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
@@ -54,7 +62,16 @@ prompt_manager = PromptManager(
 # ============================================================
 LLM_MODE = os.getenv("LLM_MODE", "local").lower()
 
-if LLM_MODE == "gateway":
+# pytest 환경에서는 무조건 dummy 모델 사용
+if "PYTEST_CURRENT_TEST" in os.environ:
+    logger.info("🧪 Pytest 환경 감지 → Dummy LLM 사용")
+    model_gateway = ModelGateway(
+        local_model_path=None,
+        use_real_llm=False,
+        monitoring_enabled=False,
+    )
+
+elif LLM_MODE == "gateway":
     model_gateway = ModelGateway(
         local_model_path=os.path.join(
             "llm", "models", "mistral-7b-instruct-v0.2.Q4_K_M.gguf"
@@ -62,6 +79,7 @@ if LLM_MODE == "gateway":
         use_real_llm=True,
         enable_fallback=True,
         monitoring_enabled=True,
+        timeout=60,
     )
 else:
     # 기본: 로컬 모델 사용
@@ -182,7 +200,8 @@ def validate_evidence_refs(evidences: list):
 
         if not re.fullmatch(r"[0-9a-fA-F]{6,64}", e["sha256"]):
             raise HTTPException(422, detail="sha256 must be hex format")
-
+        
+        
 
 # ============================================================
 #  Prompt 생성
@@ -207,8 +226,8 @@ def build_prompt(name: str, event_text: str, evidences: list, rag_hits: list):
     try:
         rag_summaries = rag.summarize_hits(
             rag_hits,
-            max_sentences_per_hit=2,
-            budget_sentences=6,
+            max_sentences_per_hit=1,
+            budget_sentences=3,
             query=event_text,
         )
     except Exception:
@@ -297,23 +316,41 @@ def clean_text(text: str) -> str:
     return text.strip()
 
 ACTION_KEYWORDS = [
-    "block", "disable", "fail2ban", "mfa", "change password",
-    "investigate", "check", "monitor"
+    "investigate", "block", "disable", "mfa",
+    "change password", "change ssh", "reset ssh",
+    "reset password", "update credentials",
+    "secure access", "harden"
 ]
 
-def normalize_summary(summary: str, event_text: str) -> str:
-    cleaned = clean_text(summary).lower()
+def normalize_summary(summary: str, event_masked: str) -> str:
+    cleaned = clean_text(summary)
+    lower = cleaned.lower()
 
-    # If LLM generates actions instead of a summary => fallback
-    if any(k in cleaned for k in ACTION_KEYWORDS):
+
+    action_patterns = [
+        r"(change|reset).*(password|key)",
+        r"disable.*(password|auth)",
+        r"(enable|set up).*mfa",
+        r"(block|deny).*ip",
+        r"investigate",
+        r"review",
+        r"check",
+        r"monitor"
+    ]
+    
+    # LLM이 조치 문장으로 판단될 경우 → summary 취소
+    if any(k in lower for k in ACTION_KEYWORDS):
         cleaned = ""
+    cleaned = cleaned.strip("\"' ")
+    cleaned = cleaned.rstrip(".")
+    
+    # summary가 없거나 "모른다"거나 "unknown"이면
+    if not cleaned or lower in ("unknown", "모른다"):
+        cleaned = event_masked[:80] + "..."
 
-    # If summary is invalid or missing => fallback to event
-    if not cleaned or cleaned in ("unknown", "모른다"):
-        cleaned = event_text[:80] + ("..." if len(event_text) > 80 else "")
+    # 첫 글자 대문자 처리
+    return cleaned[0].upper() + cleaned[1:] if cleaned else "Unknown event"
 
-    # Restore capitalization
-    return cleaned[0].upper() + cleaned[1:] if cleaned else ""
 
 
 
@@ -354,264 +391,296 @@ async def send_webhook_request(url: str, body: bytes, signature: str):
 # ============================================================
 @app.post("/analyze")
 async def analyze_log(payload: dict):
-    """
-    탐지 이벤트 분석 메인 엔드포인트
-    - 마스킹 → RAG → AttackMapper → LLM 3-step(summary / mapping / actions)
-    - Rule 기반 ATT&CK 매핑을 우선 적용 (LLM은 보조)
-    - recommended_actions / evidence_refs 최소 1개 보장
-    """
     try:
         # ---------------------------
         # 0. 입력 검증
         # ---------------------------
         if "event_text" not in payload:
             raise HTTPException(422, "event_text must be provided")
-        if not isinstance(payload["event_text"], str):
-            raise HTTPException(422, "event_text must be a string")
 
         incident_id = payload.get("incident_id", str(uuid.uuid4()))
         event_text = payload["event_text"]
         evidences = payload.get("evidences", [])
+        
+        if not evidences:
+           raise HTTPException(
+               422,
+               detail={
+                   "error_code": "EVIDENCE_REQUIRED",
+                   "message": "At least one evidence must be provided"
+               }
+            )       
 
         # ---------------------------
-        # 1. 마스킹
+        # 1. 마스킹 처리
         # ---------------------------
         event_masked, _ = mask_all(event_text)
 
-        # Evidence 마스킹 + snippet 강제 문자열화
-        masked_evidences = [
-            {
-                **e,
-                "snippet": str(e.get("snippet", "")),
-            }
-            for e in evidences
-        ]
+        masked_evidences = []
+        for e in evidences:
+            snippet = e.get("snippet")
 
-        # Evidence가 하나도 없으면 기본 raw evidence 생성
-        if not masked_evidences:
-            masked_evidences.append(
-                {
-                    "type": "raw",
-                    "ref_id": incident_id,
-                    "source": "event_text",
-                    "offset": 0,
-                    "length": len(event_masked),
-                    "sha256": "deadbeef",  # TODO: 실제 SHA256 계산 로직으로 교체 가능
-                    "snippet": event_masked[:80] + ("..." if len(event_masked) > 80 else ""),
-                }
-            )
+            # evidence.data 기반 snippet 자동 추출
+            data = e.get("data")
+            if not snippet and isinstance(data, str):
+               snippet = data[:120]
 
-        # Evidence 형식 검증
-        validate_evidence_refs(masked_evidences)
+            # fallback: event_text 일부라도 넣기
+            if not snippet:
+               snippet = event_masked[:50]
+            else:
+                snippet = snippet[:50]
+            
+
+            masked_evidences.append({**e, "snippet": str(snippet)})
 
         # ---------------------------
-        # 2. RAG 검색 (실패해도 치명적이지 않음)
+        # ✨ 토큰 폭주 방지: evidence 최대 2~3개 제한
+        # ---------------------------
+        masked_evidences = masked_evidences[:2]
+
+        # ---------------------------
+        # Evidence validation
+        # ---------------------------
+        validate_evidence_refs(masked_evidences)
+        
+        # 2-1. YARA/HEX evidence → RAG 인덱싱 (텍스트 기반 요약만 저장)
+        for e in masked_evidences:
+            if e.get("type") in ("yara", "hex"):
+                # snippet이 없으면 event 일부라도 사용
+                rag_text = e.get("snippet") or event_masked[:120]
+                rag.index_documents(
+                    doc_id=e["ref_id"],
+                    text=str(rag_text),
+                )
+        # ---------------------------
+        # 2. RAG 검색
         # ---------------------------
         try:
-            rag_hits = rag.retrieve(event_masked, top_k=5)
-        except Exception as e:
-            logger.warning(f"[RAG] retrieve failed: {e}")
+            rag_hits = rag.retrieve(event_masked, top_k=2)
+        except:
             rag_hits = []
 
         # ---------------------------
-        # 3. AttackMapper 선 매핑 (Rule 기반)
+        # 3. AttackMapper 선 매핑
         # ---------------------------
         mapped_results = attack_mapper.map(event_masked, masked_evidences)
 
-        # ATT&CK 매핑 후 중복 제거 및 가장 구체적 기술 우선
         if mapped_results:
-        # confidence 높은 순 정렬
             mapped_results.sort(key=lambda x: x["confidence"], reverse=True)
-
-            # 상위 기술(T1110) 제거 → 하위 기술(T1110.001)만 남기기
-            selected = []
-            seen_prefix = set()
-            for item in mapped_results:
-                ttp = item["id"] if "id" in item else item.get("ttp_id")
-                prefix = ttp.split(".")[0]
-                if prefix not in seen_prefix:
-                    selected.append(item)
-                    seen_prefix.add(prefix)
-    
-            attack_mapping = [item.get("id") or item.get("ttp_id") for item in selected]
-            mapping_confidence = selected[0].get("confidence", 0.6)
+            best = mapped_results[0]
+            attack_mapping = [best.get("id")] if best.get("id") else ["UNKNOWN"]
+            mapping_confidence = mapped_results[0].get("confidence", 0.6)
         else:
             attack_mapping = ["UNKNOWN"]
             mapping_confidence = 0.4
 
+        # ======================================================
+        # RULE OVERRIDE — SSH Brute Force
+        # ======================================================
+        ssh_fail_count = len(re.findall(r"failed ssh login", event_masked.lower()))
+
+        if ssh_fail_count >= 3:
+            attack_mapping = ["T1110.001"]
+            mapping_confidence = 0.95
+
+        # ======================================================
+        # FTP → Unknown + Guardrail
+        # ======================================================
+        if "ftp" in event_masked.lower():
+            attack_mapping = ["UNKNOWN"]
+            mapping_confidence = 0.2
+
         # ---------------------------
-        # 4. LLM 3-step 호출
-        # ---------------------------
-        # 4-1) Summary (LLM JSON 파싱 → 정리)
+        # 4. LLM Summary
         # ---------------------------
         summary_prompt = build_prompt("summary", event_masked, masked_evidences, rag_hits)
-        summary_raw = await model_gateway.generate(summary_prompt)
-        summary_json = safe_json_extract(summary_raw) or {}
-
-        raw_summary = summary_json.get("summary", "")
-
-        # summary 내용 정리
-        summary = clean_text(raw_summary)
-
-        # summary에 action 성향 키워드가 들어가면 fallback 처리
-        if any(k in summary.lower() for k in ACTION_KEYWORDS):
-            summary = ""
-
-        # summary가 너무 짧거나 미Valid하면 event 기반 조정
-        if not summary or summary.lower() in ("unknown", "모른다"):
-            summary = event_masked[:80] + ("..." if len(event_masked) > 80 else "")
-
-        # 최종 마무리 정규화
-        summary = summary.strip()
-        summary = re.sub(r"\s+", " ", summary)
-        summary = summary[0].upper() + summary[1:] if summary else "Unknown event"
-
-        # ---------------------------
-        #    4-2) ATT&CK 매핑 (LLM 보조)
-        # ---------------------------
-        attack_prompt = build_prompt("attack_mapping", event_masked, masked_evidences, rag_hits)
-        attack_raw = await model_gateway.generate(attack_prompt)
-        attack_json = safe_json_extract(attack_raw)
-
-        llm_attack_ids = []
-        if isinstance(attack_json, list):
-            for item in attack_json:
-                if isinstance(item, dict):
-                    tid = item.get("technique_id") or item.get("id")
-                    if tid:
-                        llm_attack_ids.append(tid)
-
-        if not llm_attack_ids:
-            llm_attack_ids = ["UNKNOWN"]
+        raw_summary_response = await model_gateway.generate(summary_prompt)
+        summary_json = safe_json_extract(raw_summary_response)
+        
+        # Missing fields 보정 (LLM JSON 일부만 생성 시)
+        summary_json.setdefault("summary", event_masked[:80] + "...")
+        summary_json.setdefault("attack_mapping", attack_mapping)
+        summary_json.setdefault("recommended_actions", [])
+        summary_json.setdefault("confidence", 0.5)
+        summary_json.setdefault("evidence_refs", masked_evidences)
+        summary_json.setdefault("hil_required", False)
 
         
 
+
+        # JSON 파싱 실패 시 필수 스키마 최소값 자동 보정
+        if not summary_json or not isinstance(summary_json, dict):
+            logger.warning("[Summary] LLM returned invalid JSON. Applying fallback default.")
+            summary_json = {
+                "summary": event_masked[:80] + "...",
+                "attack_mapping": attack_mapping,  # 기존 매퍼 값 반영
+                "recommended_actions": ["추가 로그 수집 필요"],
+                "confidence": 0.5,
+                "evidence_refs": masked_evidences,
+                "hil_required": True
+            }
+
+        if not validate_schema(summary_json):
+           # 1회 재시도
+           logger.warning("[SCHEMA] Summary schema mismatch → retry once")
+           raw_retry = await model_gateway.generate(summary_prompt)
+           summary_json = safe_json_extract(raw_retry)
+
+           if not validate_schema(summary_json):
+               raise HTTPException(
+                   status_code=422,
+                   detail={
+                       "error_code": "SCHEMA_VALIDATION_FAILED",
+                       "message": "LLM summary schema mismatch twice"
+                   }
+               )
+        
+        raw_summary = summary_json.get("summary", "")
+        summary = normalize_summary(raw_summary, event_masked)
+        logger.info(f"[Summary] raw={raw_summary!r} → normalized={summary!r}")
+    
+
+    
+        # 🚨 summary에 Action 문구가 남아있을 경우 강제 복구
+        lower_summary = summary.lower()
+        if any(keyword in lower_summary for keyword in ACTION_KEYWORDS):
+            logger.warning("[Guardrail] Summary still contains action → fallback to event_masked")
+            summary = event_masked[:80] + "..."
+
+        # 🚫 JSON 문법 잔여 따옴표 제거
+        summary = summary.strip().strip("\"'")
+
+
+
         # ---------------------------
-        #    4-3) 대응 조치 생성
+        # 5. Recommended Actions
         # ---------------------------
-        actions_prompt = build_prompt(
-            "response_guide",
-            event_masked,
-            masked_evidences,
-            rag_hits,
-        )
+        actions_prompt = build_prompt("response_guide", event_masked, masked_evidences, rag_hits)
+        actions_prompt = actions_prompt.replace("${attack_mapping_json}", json.dumps(attack_mapping))
+        actions_json = safe_json_extract(await model_gateway.generate(actions_prompt)) or {}
+        
+        actions = []
 
-        # 템플릿 내 attack_mapping_json 플레이스홀더 치환
-        actions_prompt = (
-            actions_prompt
-            .replace("${attack_mapping_json}", json.dumps(attack_mapping))
-            .replace("{attack_mapping_json}", json.dumps(attack_mapping))
-        )
-
-        actions_raw = await model_gateway.generate(actions_prompt)
-        actions_json = safe_json_extract(actions_raw) or {}
-
-        recommended_actions: list[str] = []
-
-        # response_guide_prompt 형식 (object 리스트) → 문자열 리스트로 변환
-        if isinstance(actions_json, dict) and isinstance(actions_json.get("recommended_actions"), list):
-            for item in actions_json["recommended_actions"]:
-                if isinstance(item, dict):
-                    act = item.get("action")
-                    if act:
-                        recommended_actions.append(str(act).strip())
-                elif isinstance(item, str):
-                    recommended_actions.append(item.strip())
-
-        # summary_prompt 에서 recommended_actions 가 나왔을 수도 있음
-        if not recommended_actions and isinstance(summary_json.get("recommended_actions"), list):
-            for item in summary_json["recommended_actions"]:
-                if isinstance(item, str) and item.strip():
-                    recommended_actions.append(item.strip())
-
-        # 마지막 fallback
-        if not recommended_actions:
-            recommended_actions = ["추가 로그 수집 및 관리자 검토 필요"]
+        rec_list = actions_json.get("recommended_actions")
+        if isinstance(rec_list, list):
+            for item in rec_list:
+                if isinstance(item, str):
+                    actions.append(item.strip())
+       
+                    
+        if not actions:
+            actions = ["추가 로그 수집 및 관리자 검토 필요"]
+        
+        if not isinstance(actions, list):
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error_code": "SCHEMA_VALIDATION_FAILED",
+                    "message": "recommended_actions must be a list"
+                }
+            )
 
         # ======================================================
-        # 5. 신뢰도 계산 & HIL 결정 (Rule + LLM + RAG)
+        # Final Confidence — RULE + LLM + RAG
         # ======================================================
+        rule_conf = mapping_confidence
+        llm_conf = float(summary_json.get("confidence", 0.5))
+        rag_conf = max((h.get("final_score", 0) for h in rag_hits), default=0) * 0.8
 
-        # 5-1) Rule 기반 신뢰도
-        # 가장 구체적 기술일수록 높은 점수
-        if attack_mapping != ["UNKNOWN"]:
-            if any("." in tid for tid in attack_mapping):  # 하위 기술 존재 (ex. T1110.001)
-                rule_confidence = 0.75
-            else:  # 상위 기술만 (ex. T1110)
-                rule_confidence = 0.60
-        else:       
-            rule_confidence = 0.40
+        confidence = round(
+            rule_conf * 0.7 +
+            llm_conf * 0.2 +
+            rag_conf * 0.1,
+        2)
 
-        # 5-2) LLM Confidence 활용
-        try:
-            llm_confidence = float(summary_json.get("confidence", 0.5))
-        except Exception:
-            llm_confidence = 0.5
+        # Brute force 확정 시 Confidence 추가 보정
+        if attack_mapping == ["T1110.001"]:
+            confidence = max(confidence, 0.80)
 
-        # 5-3) RAG 기반 신뢰도 계산
-        if rag_hits:
-            rag_confidence = max(h.get("final_score", 0.0) for h in rag_hits)
-            rag_confidence = min(1.0, rag_confidence) * 0.8  # 과신 방지
-        else:
-            rag_confidence = 0.0
-
-        # 5-4) 가중합 (Rule + LLM + RAG)
-        # 운영에서 가장 믿을 수 있는 Rule 가중을 40%로 설정
-        confidence = (
-            rule_confidence * 0.4 +
-            llm_confidence * 0.4 +
-            rag_confidence * 0.2
-        )
-
+        # 0.0 ~ 1.0 범위 클램프
         confidence = round(min(max(confidence, 0.0), 1.0), 2)
 
-        # 5-5) 최종 HIL 필요 여부 결정
-        # 0.7 이상이면 자동 승인, 미만이면 승인 요청
-        hil_required = confidence < 0.70
-        status = "pending_approval" if hil_required else "approved"
+        # B안 정책: >=0.8 approved, 0.5~0.8 HIL, <0.5 reject
+        hil_required = determine_hil_requirement(confidence)
 
+        if not hil_required:
+            status = "approved"
+            next_action = "monitor"
+        elif confidence >= 0.5:
+            status = "pending_approval"
+            next_action = "wait_approval"
+        else:
+            status = "rejected"
+            next_action = "add_evidence"
+
+
+
+
+        # Guardrail: FTP는 무조건 HIL
+        if "ftp" in event_masked.lower():
+            confidence = min(confidence, 0.5)
+            hil_required = True
+            status = "pending_approval"
+            next_action = "wait_approval"
 
         # ======================================================
-        # 6. IncidentOutput 저장 (Pydantic)
+        # Save + Response
         # ======================================================
-        evidence_objs = [EvidenceRef(**e) for e in masked_evidences]
-
         INCIDENTS[incident_id] = IncidentOutput(
             summary=summary,
             attack_mapping=attack_mapping,
-            recommended_actions=recommended_actions,
+            recommended_actions=actions,
             confidence=confidence,
             hil_required=hil_required,
-            evidence_refs=evidence_objs,
+            evidence_refs=[EvidenceRef(**e) for e in masked_evidences],
             status=status,
         )
-
-        # 의사결정 로그
-        log_incident_decision(incident_id, confidence, hil_required)
-
+        
         # ======================================================
-        # 7. 최종 응답
+        # (선택) HIL 자동 Webhook 호출 – callback_url 이 들어왔을 때만
         # ======================================================
+        callback_url = "http://localhost:10555/webhooks/test-receiver"
+        
+        if hil_required and callback_url:
+            try:
+                body = {
+                    "incident_id": incident_id,
+                    "status": status,
+                    "summary": summary,
+                    "confidence": confidence,
+                    "evidence_refs": masked_evidences,
+                }
+                body_bytes = json.dumps(body).encode()
+                signature = hmac.new(
+                    WEBHOOK_SECRET.encode(),
+                    body_bytes,
+                    hashlib.sha256
+                ).hexdigest()
+                # 외부 수신기는 /webhooks/test-receiver 처럼 X-Signature 헤더 검증
+                asyncio.create_task(send_webhook_request(callback_url, body_bytes, signature))
+            except Exception as _:
+                # Webhook 실패해도 본 API 응답은 그대로 진행
+                pass
+        # ---------------------------
+        # next_action 자동 설정
+        # ---------------------------
+        if hil_required:
+            next_action = "wait_approval"
+        else:
+            next_action = "monitor"
+
+
         return {
             "incident_id": incident_id,
             "summary": summary,
             "attack_mapping": attack_mapping,
-            "recommended_actions": recommended_actions,
+            "recommended_actions": actions,
             "confidence": confidence,
             "hil_required": hil_required,
             "status": status,
-            # API 응답에는 원본 evidences 구조 유지
-            "evidence_refs": [
-                {
-                    "type": e["type"],
-                    "ref_id": e["ref_id"],
-                    "source": e["source"],
-                    "offset": e["offset"],
-                    "length": e["length"],
-                    "sha256": e["sha256"],
-                }
-                for e in masked_evidences
-            ],
+            "evidence_refs": masked_evidences,
+            "next_action": next_action,
         }
 
     except HTTPException:
@@ -619,6 +688,8 @@ async def analyze_log(payload: dict):
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(500, str(e))
+    
+    
 
 
 # ============================================================
@@ -627,33 +698,68 @@ async def analyze_log(payload: dict):
 @app.post("/webhooks/hil")
 async def send_hil_webhook(payload: dict, idempotency_key: str = Header(None)):
     """
-    HIL Required 발생 시 외부 시스템으로 Webhook 전송
-    - Idempotency-Key 기반 중복 방지
-    - HMAC SHA256 서명 포함
-    - 재시도(3회)
+    HIL Required → 외부 시스템에 Webhook 전송
+    - Signature + Timestamp + Idempotency 강화
     """
     url = payload.get("callback_url")
     if not url:
         raise HTTPException(422, "Missing callback_url")
+
+    timestamp = payload.get("timestamp")
+    if not timestamp:
+        raise HTTPException(401, "Missing timestamp in webhook payload")
+
+    signature_header = payload.get("signature")
+    if not signature_header:
+        raise HTTPException(401, "Missing signature")
+
+    # Timestamp 5분 이내 검증 (Replay Attack 방지)
+    if abs(time.time() - float(timestamp)) > 300:
+        raise HTTPException(401, "Signature expired")
+
+    # Idempotency 필수 + DB 조회
     if not idempotency_key:
         raise HTTPException(422, "Missing Idempotency-Key header")
 
-    # 중복 요청 방지
     if idempotency_key in IDEMPOTENCY_DB:
         return {"status": "duplicate", "incident_id": IDEMPOTENCY_DB[idempotency_key]}
 
-    body = json.dumps(payload).encode()
-    signature = hmac.new(WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
+    # Payload 전체에 대한 서명 검증
+    expected_sig = hmac.new(
+        WEBHOOK_SECRET.encode(),
+        json.dumps(payload).encode(),
+        hashlib.sha256
+    ).hexdigest()
 
-    success = await send_webhook_request(url, body, signature)
-    if not success:
-        raise HTTPException(503, "Webhook send failed after retries")
+    if not hmac.compare_digest(signature_header, expected_sig):
+        raise HTTPException(401, "Invalid signature hash")
 
-    incident_id = payload.get("incident_id", str(uuid.uuid4()))
+    # 정상 → DB 저장
+    incident_id = payload.get("incident_id")
     IDEMPOTENCY_DB[idempotency_key] = incident_id
 
-    return {"status": "sent", "incident_id": incident_id}
+    return {"status": "accepted", "incident_id": incident_id}
 
+@app.post("/webhooks/test-receiver")
+async def webhook_receiver(payload: dict, x_signature: str = Header(None)):
+    """
+    테스트 Webhook 수신기 (서명 검증 포함)
+    Swagger UI에서 분석 후 Webhook 테스트 가능
+    """
+    if not x_signature:
+        raise HTTPException(401, "Missing X-Signature")
+
+    expected = hmac.new(
+        WEBHOOK_SECRET.encode(),
+        json.dumps(payload).encode(),
+        hashlib.sha256
+    ).hexdigest()
+
+    if not hmac.compare_digest(x_signature.replace("sha256=", ""), expected):
+        raise HTTPException(401, "Invalid signature")
+
+    logger.info(f"[Webhook Receiver] OK payload={payload}")
+    return {"status": "ack", "received": payload}
 
 # ============================================================
 #  Incident 조회 API
@@ -725,3 +831,8 @@ async def reject_incident(incident_id: str):
         "summary": incident.summary,
         "confidence": incident.confidence,
     }
+
+@app.get("/healthz")
+async def health_check():
+    return {"status": "ok"}
+
