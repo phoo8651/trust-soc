@@ -1,4 +1,4 @@
-1. Goals
+1. 목표
 
 - 애플리케이션/NGINX 로그를 안전하게 중앙으로 전송
 - 에이전트 코드/서비스를 직접 수정하지 않고, 중앙에서 정책/명령 제어
@@ -6,8 +6,7 @@
 - 새 VM 환경에서도 스크립트 한 번으로 에이전트 스택 설치/등록 가능하게 만들기
 
 
-2. Architecture Overview
-2.1 OTEL Agent (`otel-agent`)
+2. Architecture Overview /  OTEL Agent (`otel-agent`)
 
 - OpenTelemetry Collector 기반 로그 에이전트
 - `filelog` receiver로 `/var/log/nginx/access.log` 수집
@@ -248,3 +247,4 @@ Environment="INGEST_TOKEN=<여기에_발급받은_access_token>"
 sudo systemctl daemon-reload
 sudo systemctl enable --now otel-agent
 sudo systemctl status otel-agent
+
