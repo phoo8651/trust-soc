@@ -1,4 +1,0 @@
-CANON_TENANT_HEADER = "X-Client-Id"  
-LEGACY_TENANT_HEADER = "X-Tenant-Id" 
-ACTOR_ID_HEADER = "X-Actor-Id"
-ACTOR_ROLES_HEADER = "X-Actor-Roles"
