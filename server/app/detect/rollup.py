@@ -8,25 +8,29 @@ Prometheus 지표(롤업 지연 시간) 측정 기능 추가.
 """
 import os, sys, logging, psycopg2
 from psycopg2.extras import DictCursor
-from prometheus_client import start_http_server, Histogram # ⚠️ Prometheus 클라이언트 라이브러리 추가
+from prometheus_client import (
+    start_http_server,
+    Histogram,
+)  # ⚠️ Prometheus 클라이언트 라이브러리 추가
 
 # ───────────────────────────────────────────────────────────
 # 환경변수
 # ───────────────────────────────────────────────────────────
 # 데이터베이스 연결 정보를 환경 변수에서 가져오거나 기본값 설정
-DB_HOST  = os.getenv("DB_HOST", "localhost")
-DB_PORT  = os.getenv("DB_PORT", "5432")
-DB_NAME  = os.getenv("DB_NAME", "logs_db")
-DB_USER  = os.getenv("DB_USER", "postgres")
-DB_PASS  = os.getenv("DB_PASS", "password")
-PROMETHEUS_PORT = int(os.getenv("PROMETHEUS_PORT", 8000)) # Prometheus 노출 포트
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_PORT = os.getenv("DB_PORT", "5432")
+DB_NAME = os.getenv("DB_NAME", "logs_db")
+DB_USER = os.getenv("DB_USER", "postgres")
+DB_PASS = os.getenv("DB_PASS", "password")
+PROMETHEUS_PORT = int(os.getenv("PROMETHEUS_PORT", 8000))  # Prometheus 노출 포트
 
 # ───────────────────────────────────────────────────────────
 # 로깅
 # ───────────────────────────────────────────────────────────
 # 로깅 설정: 시간, 레벨, 메시지 형식으로 INFO 레벨 이상 출력
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
+)
 logger = logging.getLogger("rollup")
 
 # ───────────────────────────────────────────────────────────
@@ -47,8 +51,8 @@ WINDOWS = [
 ROLLUP_LATENCY = Histogram(
     "rollup_job_latency_seconds",
     "Latency of the feature rollup job (including commit)",
-    ["suffix"], # 윈도우 유형(1m, 5m, 1h)별로 분류하기 위한 레이블
-    buckets=(0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0, float('inf'))
+    ["suffix"],  # 윈도우 유형(1m, 5m, 1h)별로 분류하기 위한 레이블
+    buckets=(0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0, float("inf")),
 )
 
 # ───────────────────────────────────────────────────────────
@@ -103,25 +107,146 @@ DO UPDATE SET
 # 메인 함수
 # ───────────────────────────────────────────────────────────
 
+
+def ensure_schema(conn):
+    """
+    feature_rollup_1m / 5m / 1h 와 events 테이블이 없으면 생성합니다.
+    - ON CONFLICT 에서 사용하는 PK도 함께 정의합니다.
+    - gen_random_uuid() 를 위해 pgcrypto 확장을 시도합니다.
+    """
+    with conn.cursor() as cur:
+        # gen_random_uuid() 사용을 위한 확장 (슈퍼유저 필요, 실패 시 경고만)
+        try:
+            cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto;")
+        except Exception as e:
+            logger.warning("pgcrypto 확장 생성 실패(무시): %s", e)
+
+        # 1분 롤업 테이블 (기본 피처만)
+        cur.execute(
+            """
+        CREATE TABLE IF NOT EXISTS feature_rollup_1m (
+            client_id         text        NOT NULL,
+            host_name         text        NOT NULL,
+            source_ip         text        NOT NULL,
+            window_start      timestamptz NOT NULL,
+            window_end        timestamptz NOT NULL,
+            event_count       bigint      NOT NULL,
+            error4xx_ratio    double precision,
+            error5xx_ratio    double precision,
+            unique_url_count  bigint,
+            unique_user_count bigint,
+            PRIMARY KEY (client_id, host_name, source_ip, window_start)
+        );
+        """
+        )
+
+        # 5분 롤업 테이블 (ML + Hybrid 가 사용하는 컬럼 포함)
+        cur.execute(
+            """
+        CREATE TABLE IF NOT EXISTS feature_rollup_5m (
+            client_id         text        NOT NULL,
+            host_name         text        NOT NULL,
+            source_ip         text        NOT NULL,
+            window_start      timestamptz NOT NULL,
+            window_end        timestamptz NOT NULL,
+            event_count       bigint      NOT NULL,
+            error4xx_ratio    double precision,
+            error5xx_ratio    double precision,
+            unique_url_count  bigint,
+            unique_user_count bigint,
+            ml_score          double precision,
+            ml_anomaly        boolean,
+            ml_processed      boolean     DEFAULT FALSE,
+            hybrid_processed  boolean     DEFAULT FALSE,
+            final_score       double precision,
+            PRIMARY KEY (client_id, host_name, source_ip, window_start)
+        );
+        """
+        )
+
+        # 1시간 롤업 테이블 (EWMA 이상 여부 플래그 포함)
+        cur.execute(
+            """
+        CREATE TABLE IF NOT EXISTS feature_rollup_1h (
+            client_id         text        NOT NULL,
+            host_name         text        NOT NULL,
+            source_ip         text        NOT NULL,
+            window_start      timestamptz NOT NULL,
+            window_end        timestamptz NOT NULL,
+            event_count       bigint      NOT NULL,
+            error4xx_ratio    double precision,
+            error5xx_ratio    double precision,
+            unique_url_count  bigint,
+            unique_user_count bigint,
+            ewma_anomaly      boolean     DEFAULT FALSE,
+            PRIMARY KEY (client_id, host_name, source_ip, window_start)
+        );
+        """
+        )
+
+        # events 테이블 (IForest / YARA / Hybrid 가 공통으로 사용하는 이벤트 저장소)
+        cur.execute(
+            """
+        CREATE TABLE IF NOT EXISTS events (
+            event_id        uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+            client_id       text,
+            host_name       text,
+            source_ip       text,
+            event_category  text,
+            event_type      text,
+            severity        text,
+            summary         text,
+            description     text,
+            ml_score        double precision,
+            ml_threshold    double precision,
+            metadata        jsonb,
+            evidence_refs   jsonb,
+            attack_mapping  text,
+            "@timestamp"    timestamptz NOT NULL
+        );
+        """
+        )
+
+        # 조회 패턴에 맞는 인덱스들 (있으면 성능 개선, 이미 있으면 무시)
+        cur.execute(
+            """
+        CREATE INDEX IF NOT EXISTS idx_events_type_ts
+            ON events(event_type, "@timestamp");
+        """
+        )
+        cur.execute(
+            """
+        CREATE INDEX IF NOT EXISTS idx_events_client_host_ts
+            ON events(client_id, host_name, "@timestamp");
+        """
+        )
+
+    conn.commit()
+    logger.info("feature_rollup_* 및 events 테이블 스키마 확인/생성 완료")
+
+
 def do_rollup(conn, suffix, interval, retention):
     """
     지정된 윈도우 설정으로 데이터 집계를 실행하고 실행 시간을 Prometheus에 기록하는 함수
     """
     # ⚠️ SQL 템플릿 포매팅: do_rollup 함수 내에서 'sql' 변수를 정의하도록 원래 코드 구조 복원
     sql = ROLLUP_SQL.format(suffix=suffix, interval=interval, retention=retention)
-    
+
     # 롤업 작업의 실행 시간을 측정하기 위해 ROLLUP_LATENCY 히스토그램을 사용합니다.
     # .labels(suffix=suffix)를 사용하여 롤업 유형(suffix)별로 지연 시간을 분류합니다.
     # .time() 컨텍스트 매니저를 사용하면 블록 실행이 끝날 때까지의 시간을 자동으로 측정하고 기록합니다.
     with ROLLUP_LATENCY.labels(suffix=suffix).time():
         with conn.cursor() as cur:
-            logger.info(f"[{suffix}] 집계 시작 (interval={interval}, retention={retention})")
+            logger.info(
+                f"[{suffix}] 집계 시작 (interval={interval}, retention={retention})"
+            )
             # SQL 실행
             cur.execute(sql)
             # 처리된 행 수 로깅 (INSERT 또는 UPDATE된 행 수)
             logger.info(f"[{suffix}] 집계 완료, {cur.rowcount} rows upserted")
         # 트랜잭션 커밋 (with .time() 블록 안에 포함되어 측정됨)
         conn.commit()
+
 
 def main():
     """
@@ -139,14 +264,22 @@ def main():
     conn = None
     try:
         # PostgreSQL/TimescaleDB 데이터베이스 연결 시도
-        conn = psycopg2.connect(host=DB_HOST, port=DB_PORT, dbname=DB_NAME,
-                                 user=DB_USER, password=DB_PASS,
-                                 cursor_factory=DictCursor, connect_timeout=5)
+        conn = psycopg2.connect(
+            host=DB_HOST,
+            port=DB_PORT,
+            dbname=DB_NAME,
+            user=DB_USER,
+            password=DB_PASS,
+            cursor_factory=DictCursor,
+            connect_timeout=5,
+        )
     except Exception as e:
         logger.error("DB 연결 실패: %s", e)
-        sys.exit(1) # 연결 실패 시 스크립트 종료
+        sys.exit(1)  # 연결 실패 시 스크립트 종료
 
     try:
+        # 테이블 스키마 보장
+        ensure_schema(conn)
         # 정의된 모든 윈도우에 대해 순차적으로 do_rollup 함수 실행
         for suffix, interval, retention in WINDOWS:
             do_rollup(conn, suffix, interval, retention)
@@ -155,8 +288,9 @@ def main():
         logger.exception("집계 중 에러 발생")
     finally:
         if conn:
-            conn.close() # DB 연결 종료
+            conn.close()  # DB 연결 종료
             logger.info("DB 연결 종료")
+
 
 if __name__ == "__main__":
     main()
