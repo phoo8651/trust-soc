@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: logstash
+  namespace: elastic-stack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: logstash
+  template:
+    metadata:
+      labels:
+        app: logstash
+    spec:
+      containers:
+      - name: logstash
+        image: docker.elastic.co/logstash/logstash:9.2.0
+        ports:
+        - name: beats
+          containerPort: 5044
+        env:
+        - name: ES_HOSTS
+          value: "https://elasticsearch-es-http.elastic-stack.svc:9200"
+        - name: ES_USER
+          value: "elastic"
+        - name: ES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: elasticsearch-es-elastic-user
+              key: elastic
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "1Gi"
+            ephemeral-storage: "1Gi"
+          limits:
+            cpu: "1"
+            memory: "2Gi"
+            ephemeral-storage: "5Gi"
+
+        volumeMounts:
+        - name: config-volume
+          mountPath: /usr/share/logstash/config
+        - name: pipeline-volume
+          mountPath: /usr/share/logstash/pipeline
+        - name: ca-certs
+          mountPath: /etc/logstash/certificates
+          readOnly: true
+      volumes:
+      - name: config-volume
+        configMap:
+          name: logstash-config
+      - name: pipeline-volume
+        configMap:
+          name: logstash-pipeline
+      - name: ca-certs
+        secret:
+          secretName: elasticsearch-es-http-certs-public
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: logstash
+  namespace: elastic-stack
+spec:
+  ports:
+  - name: beats
+    port: 5044
+    targetPort: 5044
+  selector:
+    app: logstash
