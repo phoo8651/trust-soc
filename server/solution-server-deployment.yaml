@@ -16,7 +16,7 @@ spec:
     spec:
       volumes:
         - name: pg-data
-          emptyDir: {}        # PoC면 emptyDir로 충분, 재기동 시 데이터 초기화
+          emptyDir: {} # PoC면 emptyDir로 충분, 재기동 시 데이터 초기화
 
       containers:
         # 1) PostgreSQL 컨테이너
@@ -26,21 +26,22 @@ spec:
             - containerPort: 5432
           env:
             - name: POSTGRES_DB
-              value: "logs_db"        # detect/백엔드에서 쓰는 DB 이름
+              value: "logs_db" # detect/백엔드에서 쓰는 DB 이름
             - name: POSTGRES_USER
               value: "postgres"
             - name: POSTGRES_PASSWORD
-              value: "password"       # PoC용 간단 비밀번호
+              value: "password" # PoC용 간단 비밀번호
           volumeMounts:
             - name: pg-data
               mountPath: /var/lib/postgresql/data
 
         # 2) 솔루션 서버(backend + llm + detect 통합 이미지)
         - name: solution-all
-          image: solution-all:latest   # 본인이 빌드한 이미지명으로 교체
+          image: solution-all:latest # 본인이 빌드한 이미지명으로 교체
+          imagePullPolicy: IfNotPresent
           ports:
-            - containerPort: 8000      # backend API (/ingest/logs, /health 등)
-            - containerPort: 9000      # LLM API (/analyze, /healthz)
+            - containerPort: 8000 # backend API (/ingest/logs, /health 등)
+            - containerPort: 9000 # LLM API (/analyze, /healthz)
           env:
             # --- 백엔드용 SQLAlchemy URL ---
             - name: DATABASE_URL
@@ -48,7 +49,7 @@ spec:
 
             # --- Detect 4개 모듈용 psycopg2 접속 정보 ---
             - name: DB_HOST
-              value: "127.0.0.1"       # 같은 Pod 안의 postgres 컨테이너
+              value: "127.0.0.1" # 같은 Pod 안의 postgres 컨테이너
             - name: DB_PORT
               value: "5432"
             - name: DB_NAME

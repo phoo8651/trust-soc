@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # 통합 소스 복사 (solution_server/ 안에 backend, detect, llm 있다고 가정)
-COPY . /app
+COPY /app .
 
 # LLM 패키지 초기화 파일 정리 (_init_.py → __init__.py)
 RUN [ -f llm/_init_.py ] && mv llm/_init_.py llm/__init__.py || true \
@@ -31,7 +31,6 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
 # 통합 실행 스크립트 복사
-COPY start-all.sh /app/start-all.sh
-RUN chmod +x /app/start-all.sh
+RUN chmod +x start-all.sh
 
-CMD ["/app/start-all.sh"]
+CMD ["./start-all.sh"]

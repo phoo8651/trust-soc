@@ -50,7 +50,7 @@ python hybrid_detect.py &
 HYBRID_PID=$!
 
 echo "[entrypoint] all processes started, waiting..."
-wait -n $BACKEND_PID $LLM_PID $YARA_PID $ROLLUP_PID $ML_PID $HYBRID_PID
+wait $BACKEND_PID $LLM_PID $YARA_PID $ROLLUP_PID $ML_PID $HYBRID_PID
 EXIT_CODE=$?
 
 echo "[entrypoint] one of the processes exited with code ${EXIT_CODE}, shutting down..."
