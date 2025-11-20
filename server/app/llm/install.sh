@@ -32,7 +32,7 @@ pip install -r ../requirements.txt
 # ===============================
 # 4) llama-cpp 설치 (CPU 기본)
 # ===============================
-echo "🤖 Installing llama-cpp-python (CPU mode)..."
+echo "🤖 Installing llama-cpp-python (CPU mode, GGUF runtime for Mistral)..."
 pip install llama-cpp-python --verbose --force-reinstall --no-cache-dir
 
 # ===============================

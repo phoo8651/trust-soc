@@ -5,6 +5,7 @@ WORKDIR /app
 # 빌드에 필요한 OS 패키지 (psycopg2, 일부 과학 계산 라이브러리용)
 RUN apt-get update && apt-get install -y \
     gcc \
+    g++ \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 

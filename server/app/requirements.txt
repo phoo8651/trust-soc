@@ -21,3 +21,4 @@ alembic>=1.12,<1.14
 cryptography>=41,<43
 PyNaCl>=1.5,<1.6
 pydantic>=2.0,<3.0
+llama-cpp-python

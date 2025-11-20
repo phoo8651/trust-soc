@@ -27,7 +27,33 @@ while True:
         time.sleep(2)
 PY
 
+#############################################
+# 여기부터 LLM용 환경변수 설정
+#############################################
+
+# (선택) /app/.env 파일이 있으면 먼저 로드
+if [ -f /app/.env ]; then
+  echo "[entrypoint] loading /app/.env for LLM..."
+  set -a           # 이후에 로드되는 변수 자동 export
+  . /app/.env
+  set +a
+fi
+
+# 기본값 설정 (컨테이너 외부에서 이미 설정해 주면 그 값을 우선 사용)
+: "${LLM_MODE:=local}"
+: "${LOCAL_MODEL:=./models/mistral-7b-instruct-v0.2.Q4_K_M.gguf}"
+: "${WEBHOOK_SECRET:=change_me_please}"
+
+export LLM_MODE LOCAL_MODEL WEBHOOK_SECRET
+
+echo "[entrypoint] LLM env:"
+echo "  LLM_MODE=${LLM_MODE}"
+echo "  LOCAL_MODEL=${LOCAL_MODEL}"
+
+#############################################
 # 여기부터는 기존 내용 (backend + llm + detect 시작)
+#############################################
+
 echo "[backend] starting on :8000"
 cd /app/backend/postgres
 uvicorn main:app --host 0.0.0.0 --port 8000 &

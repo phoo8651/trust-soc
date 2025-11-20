@@ -6,10 +6,7 @@ import asyncio
 import os
 
 from typing import Dict, Any, Optional
-from llm.local_llm_PoC import DummyLocalLLM
-
-# 로컬 LLM 모듈 (llama.cpp 기반)
-from llm.local_llm_PoC import LocalLlamaLLM
+from llm.local_llm_PoC import DummyLocalLLM, LocalMistralLLM
 
 # 로그 설정
 logger = logging.getLogger("ModelGateway")
@@ -45,14 +42,13 @@ class ModelGateway:
             logger.info(f"🔹 Local LLM 모델 로드: {local_model_path}")
             # 모델 파일 유효한지 확인
             if not local_model_path or not os.path.exists(local_model_path):
-                logger.warning("🧪 No local model found → DummyLLM fallback")
-                from llm.local_llm_PoC import DummyLocalLLM
+                logger.warning("🧪 No local model found → DummyLocalLLM fallback")
                 self.llm = DummyLocalLLM()
             else:
-                self.llm = LocalLlamaLLM(model_path=local_model_path)
+                # mistral-7b-instruct GGUF 전용 로컬 LLM
+                self.llm = LocalMistralLLM(model_path=local_model_path)
         else:
             logger.info("⚙ DummyLocalLLM 사용")
-            from llm.local_llm_PoC import DummyLocalLLM
             self.llm = DummyLocalLLM()
 
     # ---------------------------------------------------------

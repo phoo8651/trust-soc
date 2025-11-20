@@ -33,6 +33,12 @@ from llm.utils.llm_response_handler import (
     log_incident_decision,
 )
 
+BASE_DIR = Path(__file__).resolve().parent
+LOCAL_MODEL_PATH = os.getenv(
+    "LOCAL_MODEL",
+    str(BASE_DIR / "models" / "mistral-7b-instruct-v0.2.Q4_K_M.gguf"),
+)
+
 # -------------------------
 # FastAPI 초기화
 # -------------------------
@@ -73,9 +79,7 @@ if "PYTEST_CURRENT_TEST" in os.environ:
 
 elif LLM_MODE == "gateway":
     model_gateway = ModelGateway(
-        local_model_path=os.path.join(
-            "llm", "models", "mistral-7b-instruct-v0.2.Q4_K_M.gguf"
-        ),
+        local_model_path=LOCAL_MODEL_PATH,
         use_real_llm=True,
         enable_fallback=True,
         monitoring_enabled=True,
@@ -84,9 +88,7 @@ elif LLM_MODE == "gateway":
 else:
     # 기본: 로컬 모델 사용
     model_gateway = ModelGateway(
-        local_model_path=os.path.join(
-            "llm", "models", "mistral-7b-instruct-v0.2.Q4_K_M.gguf"
-        ),
+        local_model_path=LOCAL_MODEL_PATH,
         use_real_llm=True,
         monitoring_enabled=True,
     )

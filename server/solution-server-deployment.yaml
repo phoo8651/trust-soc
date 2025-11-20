@@ -2,6 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: solution-server
+  namespace: solution-server
   labels:
     app: solution-server
 spec:
@@ -26,30 +27,37 @@ spec:
             - containerPort: 5432
           env:
             - name: POSTGRES_DB
-              value: "logs_db" # detect/백엔드에서 쓰는 DB 이름
+              value: "logs_db"
             - name: POSTGRES_USER
               value: "postgres"
             - name: POSTGRES_PASSWORD
-              value: "password" # PoC용 간단 비밀번호
+              value: "1q2w3e4r!"
           volumeMounts:
             - name: pg-data
               mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
 
         # 2) 솔루션 서버(backend + llm + detect 통합 이미지)
         - name: solution-all
           image: solution-all:latest # 본인이 빌드한 이미지명으로 교체
           imagePullPolicy: IfNotPresent
           ports:
-            - containerPort: 8000 # backend API (/ingest/logs, /health 등)
-            - containerPort: 9000 # LLM API (/analyze, /healthz)
+            - containerPort: 8000 # backend API
+            - containerPort: 9000 # LLM API
           env:
             # --- 백엔드용 SQLAlchemy URL ---
             - name: DATABASE_URL
-              value: "postgresql+psycopg2://postgres:password@127.0.0.1:5432/logs_db"
+              value: "postgresql+psycopg2://postgres:1q2w3e4r!@127.0.0.1:5432/logs_db"
 
             # --- Detect 4개 모듈용 psycopg2 접속 정보 ---
             - name: DB_HOST
-              value: "127.0.0.1" # 같은 Pod 안의 postgres 컨테이너
+              value: "127.0.0.1"
             - name: DB_PORT
               value: "5432"
             - name: DB_NAME
@@ -57,8 +65,16 @@ spec:
             - name: DB_USER
               value: "postgres"
             - name: DB_PASS
-              value: "password"
+              value: "1q2w3e4r!"
 
             # --- LLM 동작 모드 등 (필요에 따라) ---
             - name: LLM_MODE
               value: "local"
+
+          resources:
+            requests:
+              cpu: "1"
+              memory: "1Gi"
+            limits:
+              cpu: "2" # vCPU 2개까지
+              memory: "6Gi"
