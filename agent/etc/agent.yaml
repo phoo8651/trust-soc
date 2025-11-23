@@ -11,7 +11,7 @@ extensions:
   file_storage:
     # 디스크 기반 큐/오프셋 저장소
     directory: /var/lib/secure-log-agent/queue
-
+    create_directory: true
 receivers:
   filelog:
     include:
