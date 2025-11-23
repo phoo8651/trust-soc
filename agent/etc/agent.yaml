@@ -12,6 +12,8 @@ extensions:
     # 디스크 기반 큐/오프셋 저장소
     directory: /var/lib/secure-log-agent/queue
     create_directory: true
+    # sudo chown -R otel-agent:nogroup /var/lib/secure-log-agent < 입력해야 쓰기 권한 받게 되어 있습니다. 자동쉘에 포함 되어있음
+
 receivers:
   filelog:
     include:

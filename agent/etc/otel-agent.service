@@ -74,6 +74,7 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 ReadWritePaths=/etc/secure-log-agent
 ReadWritePaths=/var/lib/otelcol-contrib
 ReadWritePaths=/var/log
+ReadWritePaths=/var/lib/secure-log-agent
 
 [Install]
 WantedBy=multi-user.target
