@@ -22,6 +22,9 @@ REPO_DIR="/home/${LAST_USER}/lastagent"    # 리포지토리 루트
 AGENT_USER="otel-agent"                    # OTEL 에이전트용 시스템 계정
 AGENT_HOME="/etc/secure-log-agent"         # OTEL 에이전트 설정 디렉터리
 
+mkdir -p /var/lib/secure-log-agent/queue
+chown -R otel-agent:nogroup /var/lib/secure-log-agent
+
 # 이 아래부터는 일반적으로 수정 필요 없음
 ETC_DIR="${REPO_DIR}/etc"
 SYSTEMD_DIR="/etc/systemd/system"
