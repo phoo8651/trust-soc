@@ -22,6 +22,7 @@ REPO_DIR="/home/${LAST_USER}/lastagent"    # 리포지토리 루트
 AGENT_USER="otel-agent"                    # OTEL 에이전트용 시스템 계정
 AGENT_HOME="/etc/secure-log-agent"         # OTEL 에이전트 설정 디렉터리
 
+# 디렉토리 생성 및 권한 설정
 mkdir -p /var/lib/secure-log-agent/queue
 chown -R otel-agent:nogroup /var/lib/secure-log-agent
 
