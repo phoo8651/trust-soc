@@ -1,36 +1,13 @@
 apiVersion: v1
 data:
-  agent.taml:
-    "# OpenTelemetry Collector 기반 로그 에이전트 설정\r\n# 역할:\r\n# 1) nginx access
-    로그를 tail 해서 읽는다.\r\n# 2) IPv4 주소를 단순 마스킹한다.\r\n# 3) batch + 디스크 큐로 안정적으로 전송한다.\r\n#
-    4) OTLP/HTTP로 별도 수집 서버(또는 secure-forwarder)에 전송한다.\r\n#    - 서버 주소/토큰은 환경변수 INGEST_ENDPOINT
-    / INGEST_TOKEN 으로만 받는다.\r\n\r\nextensions:\r\n  health_check: {}\r\n  file_storage:\r\n
-    \   # 디스크 기반 큐/오프셋 저장소\r\n    directory: /var/lib/secure-log-agent/queue\r\n\r\nreceivers:\r\n
-    \ filelog:\r\n    include:\r\n      - /var/log/nginx/access.log\r\n    start_at:
-    end\r\n    storage: file_storage  # file_storage extensions 사용\r\n\r\nprocessors:\r\n
-    \ memory_limiter:\r\n    check_interval: 2s\r\n    limit_mib: 256\r\n\r\n  batch:\r\n
-    \   timeout: 1s\r\n    send_batch_size: 1024\r\n    send_batch_max_size: 2048\r\n\r\n
-    \ transform/pii_mask:\r\n    error_mode: ignore\r\n    log_statements:\r\n      -
-    context: log\r\n        statements:\r\n          - replace_pattern(body, \"([0-9]{1,3}\\\\.){3}[0-9]{1,3}\",
-    \"[ip_redacted]\")\r\n\r\nexporters:\r\n  otlphttp:\r\n    # secure-forwarder
-    또는 ingest 서버 주소\r\n    endpoint: ${env:INGEST_ENDPOINT}\r\n    logs_endpoint:
-    /v1/logs\r\n\r\n    headers:\r\n      Authorization: \"Bearer ${env:INGEST_TOKEN}\"\r\n\r\n
-    \   sending_queue:\r\n      enabled: true\r\n      num_consumers: 4\r\n      queue_size:
-    262144\r\n      storage: file_storage\r\n\r\n    retry_on_failure:\r\n      enabled:
-    true\r\n      initial_interval: 1s\r\n      max_interval: 30s\r\n      max_elapsed_time:
-    0s\r\n\r\n  debug:\r\n    verbosity: basic\r\n\r\nservice:\r\n  telemetry:\r\n
-    \   metrics:\r\n      address: 0.0.0.0:8889\r\n\r\n  extensions:\r\n    - health_check\r\n
-    \   - file_storage\r\n\r\n  pipelines:\r\n    logs:\r\n      receivers: [filelog]\r\n
-    \     processors:\r\n        - memory_limiter\r\n        - transform/pii_mask\r\n
-    \       - batch\r\n      exporters:\r\n        - otlphttp\r\n        - debug\r\n"
   agent.yaml:
     "# OpenTelemetry Collector 기반 로그 에이전트 설정\r\n# 역할:\r\n# 1) nginx access
     로그를 tail 해서 읽는다.\r\n# 2) IPv4 주소를 단순 마스킹한다.\r\n# 3) batch + 디스크 큐로 안정적으로 전송한다.\r\n#
     4) OTLP/HTTP로 별도 수집 서버(또는 secure-forwarder)에 전송한다.\r\n#    - 서버 주소/토큰은 환경변수 INGEST_ENDPOINT
     / INGEST_TOKEN 으로만 받는다.\r\n\r\nextensions:\r\n  health_check: {}\r\n  file_storage:\r\n
-    \   # 디스크 기반 큐/오프셋 저장소\r\n    directory: /var/lib/secure-log-agent/queue\r\n\r\nreceivers:\r\n
-    \ filelog:\r\n    include:\r\n      - /var/log/nginx/access.log\r\n    start_at:
-    end\r\n    storage: file_storage  # file_storage extensions 사용\r\n\r\nprocessors:\r\n
+    \   # 디스크 기반 큐/오프셋 저장소\r\n    directory: /var/lib/secure-log-agent/queue\r\n    create_directory:
+    true\r\n\r\nreceivers:\r\n  filelog:\r\n    include:\r\n      - /var/log/nginx/access.log\r\n
+    \   start_at: end\r\n    storage: file_storage  # file_storage extensions 사용\r\n\r\nprocessors:\r\n
     \ memory_limiter:\r\n    check_interval: 2s\r\n    limit_mib: 256\r\n\r\n  batch:\r\n
     \   timeout: 1s\r\n    send_batch_size: 1024\r\n    send_batch_max_size: 2048\r\n\r\n
     \ transform/pii_mask:\r\n    error_mode: ignore\r\n    log_statements:\r\n      -
@@ -48,11 +25,8 @@ data:
     \       - batch\r\n      exporters:\r\n        - otlphttp\r\n        - debug\r\n"
 kind: ConfigMap
 metadata:
-  annotations:
-    kubectl.kubernetes.io/last-applied-configuration: |
-      {"apiVersion":"v1","data":{"agent.yaml":"# OpenTelemetry Collector 기반 로그 에이전트 설정\r\n# 역할:\r\n# 1) nginx access 로그를 tail 해서 읽는다.\r\n# 2) IPv4 주소를 단순 마스킹한다.\r\n# 3) batch + 디스크 큐로 안정적으로 전송한다.\r\n# 4) OTLP/HTTP로 별도 수집 서버(또는 secure-forwarder)에 전송한다.\r\n#    - 서버 주소/토큰은 환경변수 INGEST_ENDPOINT / INGEST_TOKEN 으로만 받는다.\r\n\r\nextensions:\r\n  health_check: {}\r\n  file_storage:\r\n    # 디스크 기반 큐/오프셋 저장소\r\n    directory: /var/lib/secure-log-agent/queue\r\n\r\nreceivers:\r\n  filelog:\r\n    include:\r\n      - /var/log/nginx/access.log\r\n    start_at: end\r\n    storage: file_storage  # file_storage extensions 사용\r\n\r\nprocessors:\r\n  memory_limiter:\r\n    check_interval: 2s\r\n    limit_mib: 256\r\n\r\n  batch:\r\n    timeout: 1s\r\n    send_batch_size: 1024\r\n    send_batch_max_size: 2048\r\n\r\n  transform/pii_mask:\r\n    error_mode: ignore\r\n    log_statements:\r\n      - context: log\r\n        statements:\r\n          - replace_pattern(body, \"([0-9]{1,3}\\\\.){3}[0-9]{1,3}\", \"[ip_redacted]\")\r\n\r\nexporters:\r\n  otlphttp:\r\n    # secure-forwarder 또는 ingest 서버 주소\r\n    endpoint: ${env:INGEST_ENDPOINT}\r\n    logs_endpoint: /v1/logs\r\n\r\n    headers:\r\n      Authorization: \"Bearer ${env:INGEST_TOKEN}\"\r\n\r\n    sending_queue:\r\n      enabled: true\r\n      num_consumers: 4\r\n      queue_size: 262144\r\n      storage: file_storage\r\n\r\n    retry_on_failure:\r\n      enabled: true\r\n      initial_interval: 1s\r\n      max_interval: 30s\r\n      max_elapsed_time: 0s\r\n\r\n  debug:\r\n    verbosity: basic\r\n\r\nservice:\r\n  telemetry:\r\n    metrics:\r\n      level: none\r\n\r\n  extensions:\r\n    - health_check\r\n    - file_storage\r\n\r\n  pipelines:\r\n    logs:\r\n      receivers: [filelog]\r\n      processors:\r\n        - memory_limiter\r\n        - transform/pii_mask\r\n        - batch\r\n      exporters:\r\n        - otlphttp\r\n        - debug\r\n"},"kind":"ConfigMap","metadata":{"annotations":{},"name":"text4shell-otel-config","namespace":"vuln-lab"}}
-  creationTimestamp: "2025-11-23T08:08:36Z"
+  creationTimestamp: "2025-11-23T09:34:25Z"
   name: text4shell-otel-config
   namespace: vuln-lab
-  resourceVersion: "795600"
-  uid: d52bd374-1ad4-4b1f-915c-7ba0a505c999
+  resourceVersion: "799628"
+  uid: d5a04ec9-ee7e-464a-a827-0c8399e0fc49
