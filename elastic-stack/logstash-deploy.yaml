@@ -21,7 +21,7 @@ spec:
           containerPort: 5044
         env:
         - name: ES_HOSTS
-          value: "https://elasticsearch-es-http.elastic-stack.svc:9200"
+          value: "https://elasticsearch-es-http.elastic-system.svc:9200"
         - name: ES_USER
           value: "elastic"
         - name: ES_PASSWORD

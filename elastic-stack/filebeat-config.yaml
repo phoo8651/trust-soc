@@ -11,6 +11,6 @@ data:
           - /var/log/containers/*.log
 
     output.logstash:
-      hosts: ["logstash.elastic-stack.svc:5044"]
+      hosts: ["logstash.elastic-system.svc:5044"]
 
     setup.ilm.enabled: false
