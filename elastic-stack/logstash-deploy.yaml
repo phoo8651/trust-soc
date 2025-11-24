@@ -62,7 +62,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: logstash
-  namespace: elastic-stack
+  namespace: elastic-system
 spec:
   ports:
   - name: beats
