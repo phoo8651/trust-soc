@@ -18,6 +18,7 @@ import ingest_router
 import robs_router
 import export_router
 import webhook_router
+import console_router
 from ops_alerts import run_operational_checks
 
 ILM_INTERVAL_SECONDS = int(os.getenv("ILM_SCHEDULE_SECONDS", "21600"))      
@@ -72,6 +73,7 @@ app.include_router(ingest_router.router)
 app.include_router(robs_router.router)
 app.include_router(export_router.router)
 app.include_router(webhook_router.router)
+app.include_router(console_router.router)
 
 @app.get("/health")
 def health():

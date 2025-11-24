@@ -11,6 +11,7 @@ import ingest_router
 import robs_router
 import export_router
 import webhook_router
+import console_router
 
 Base.metadata.create_all(bind=engine)
 ilm.ensure_partitions(engine)
@@ -35,6 +36,7 @@ app.include_router(ingest_router.router)
 app.include_router(robs_router.router)
 app.include_router(export_router.router)
 app.include_router(webhook_router.router)
+app.include_router(console_router.router)
 
 @app.get("/health")
 def health():
