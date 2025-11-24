@@ -19,6 +19,12 @@ spec:
         - name: pg-data
           emptyDir: {} # PoC면 emptyDir로 충분, 재기동 시 데이터 초기화
 
+        # LLM 모델 디렉터리 (노드 ↔ 컨테이너 매핑)
+        - name: llm-models
+          hostPath:
+            path: /app/llm/models # 노드(호스트)에 모델이 있는 실제 경로
+            type: DirectoryOrCreate
+
       containers:
         # 1) PostgreSQL 컨테이너
         - name: postgres
@@ -67,9 +73,18 @@ spec:
             - name: DB_PASS
               value: "1q2w3e4r!"
 
-            # --- LLM 동작 모드 등 (필요에 따라) ---
+            # --- LLM 동작 모드 ---
             - name: LLM_MODE
               value: "local"
+
+            # --- 로컬 모델 절대 경로 (파일명은 실제 존재하는 이름으로) ---
+            - name: LOCAL_MODEL
+              value: "/app/llm/models/mistral-7b-instruct-v0.2.Q4_K_M.gguf"
+
+          volumeMounts:
+            - name: llm-models
+              mountPath: /app/llm/models
+              readOnly: true
 
           resources:
             requests:
