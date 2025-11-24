@@ -40,3 +40,16 @@ spec:
               mountPath: /usr/share/filebeat/data
       volumes:
         - name: config
+          configMap:
+            name: filebeat-config
+            defaultMode: 0640
+        - name: varlog
+          hostPath:
+            path: /var/log
+        - name: varlogcontainers
+          hostPath:
+            path: /var/log/containers
+        - name: data
+          hostPath:
+            path: /var/lib/filebeat-data
+            type: DirectoryOrCreate
