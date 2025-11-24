@@ -75,7 +75,8 @@ class LocalMistralLLM:
         except Exception as e:
             logger.error(f"🔥 LocalMistralLLM crashed: {e}")
             raise
-
-        return output["choices"][0]["text"].strip()
+        
+        return output["choices"][0]["text"]
+        #return output["choices"][0]["text"].strip()
 
 

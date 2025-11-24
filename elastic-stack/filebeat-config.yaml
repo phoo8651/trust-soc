@@ -13,4 +13,5 @@ data:
     output.logstash:
       hosts: ["logstash.elastic-system.svc:5044"]
 
+    # ILM은 지금은 비활성화
     setup.ilm.enabled: false

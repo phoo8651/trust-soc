@@ -1,6 +1,6 @@
 # llm/models.py
 from typing import List, Optional, Literal
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class EvidenceRef(BaseModel):
@@ -41,13 +41,13 @@ class IncidentOutput(BaseModel):
     hil_required: bool
     status: str = "pending_approval"
     
-    @validator("summary")
+    @field_validator("summary")
     def not_empty_summary(cls, v: str) -> str:
         if not v or not v.strip():
             raise ValueError("summary must not be empty")
         return v
 
-    @validator("attack_mapping", "recommended_actions")
+    @field_validator("attack_mapping", "recommended_actions")
     def no_empty_strings(cls, v: List[str]) -> List[str]:
         if any((not s) or (not s.strip()) for s in v):
             raise ValueError("array items must be non-empty strings")

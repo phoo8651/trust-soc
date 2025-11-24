@@ -70,7 +70,7 @@ python yara_batch_scanner.py &
 YARA_PID=$!
 python rollup.py &
 ROLLUP_PID=$!
-python ml_dedct.py &
+python ml_detect.py &
 ML_PID=$!
 python hybrid_detect.py &
 HYBRID_PID=$!

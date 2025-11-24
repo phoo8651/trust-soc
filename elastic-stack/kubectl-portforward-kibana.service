@@ -1,0 +1,26 @@
+[Unit]
+Description=kubectl port-forward for Kibana (elastic-system)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# kubeadm admin.conf 를 그대로 쓰는 경우 root 로 두는 것이 편합니다.
+User=root
+Group=root
+
+# kubectl 이 어떤 kubeconfig 를 사용할지 명시
+Environment=KUBECONFIG=/etc/kubernetes/admin.conf
+
+# 필요하면 --address 옵션으로 바인딩 조정 가능 (기본은 127.0.0.1)
+ExecStart=/usr/bin/kubectl port-forward --address 0.0.0.0 -n elastic-system svc/kibana-kb-http 5601:5601
+
+# 포워딩 프로세스가 끊어지면 자동 재시작
+Restart=always
+RestartSec=5
+
+# 로그는 journald 로
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
