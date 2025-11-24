@@ -19,6 +19,7 @@ receivers:
     include:
       - /var/log/nginx/access.log
       - /var/log/text4shell/app.log    # ← Text4Shell 기본 경로 추가
+      - /var/log/containers/*_poc-lab_*.log   # poc-lab 네임스페이스의 PoC 컨테이너 로그
     start_at: end
     storage: file_storage  # file_storage extensions 사용
 
