@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: filebeat
-  namespace: elastic-stack
+  namespace: elastic-system
 spec:
   selector:
     matchLabels:

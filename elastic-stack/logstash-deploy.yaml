@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: logstash
-  namespace: elastic-stack
+  namespace: elastic-system
 spec:
   replicas: 1
   selector:
