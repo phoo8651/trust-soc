@@ -17,9 +17,6 @@ set -euo pipefail
 
 
 
-# lastagent 설치 스크립트 (에이전트 + 포워더 + OTEL)
-# 환경 변수만 맞추면 자동 설치 + 등록 가능
-
 LAST_USER="last"
 REPO_DIR="/home/${LAST_USER}/lastagent"
 AGENT_USER="otel-agent"
@@ -84,7 +81,7 @@ EOF
   RESPONSE=$(curl -s --fail -X POST "$REGISTER_URL" \
     -H "Content-Type: application/json" \
     -d "${JSON_PAYLOAD}") || {
-    echo " agent-register 요청 실패. 서버 연결 확인 필요."
+    echo "agent-register 요청 실패. 서버 연결 확인 필요."
     exit 1
   }
 
