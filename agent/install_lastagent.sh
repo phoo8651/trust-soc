@@ -84,13 +84,13 @@ EOF
   RESPONSE=$(curl -s --fail -X POST "$REGISTER_URL" \
     -H "Content-Type: application/json" \
     -d "${JSON_PAYLOAD}") || {
-    echo "[FATAL] agent-register 요청 실패. 서버 연결 확인 필요."
+    echo " agent-register 요청 실패. 서버 연결 확인 필요."
     exit 1
   }
 
   TOKEN=$(echo "$RESPONSE" | jq -r '.access_token')
   if [[ -z "$TOKEN" || "$TOKEN" == "null" ]]; then
-    echo "[FATAL] 서버 응답에 access_token 없음. 응답: $RESPONSE"
+    echo "서버 응답에 access_token 없음. 응답: $RESPONSE"
     exit 1
   fi
 
