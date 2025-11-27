@@ -16,13 +16,23 @@ set -euo pipefail
 #   - AGENT_HOME : OTEL 에이전트 설정/상태 디렉터리
 
 
-# 사용자 정의 변수
+
+# lastagent 설치 스크립트 (에이전트 + 포워더 + OTEL)
+# 환경 변수만 맞추면 자동 설치 + 등록 가능
+
 LAST_USER="last"
 REPO_DIR="/home/${LAST_USER}/lastagent"
 AGENT_USER="otel-agent"
 AGENT_HOME="/etc/secure-log-agent"
 ETC_DIR="${REPO_DIR}/etc"
 SYSTEMD_DIR="/etc/systemd/system"
+
+BOOTSTRAP_SECRET="dev"  # 서버와 맞춰야 함
+AGENT_VERSION="0.1.0"
+CLIENT_ID="default"
+CONTROLLER_HOST="192.168.67.131"
+CONTROLLER_PORT="8000"
+CONTROLLER_URL="http://${CONTROLLER_HOST}:${CONTROLLER_PORT}"
 
 echo "[*] agent 설치 시작"
 
@@ -32,7 +42,7 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
-# 2. 필수 디렉토리 생성
+# 2. 디렉토리 생성
 mkdir -p "${REPO_DIR}" "${ETC_DIR}" "${REPO_DIR}/venv"
 mkdir -p "${AGENT_HOME}/remote.d"
 mkdir -p /var/lib/otelcol-contrib
@@ -45,9 +55,9 @@ fi
 
 # 4. 패키지 설치
 apt-get update
-apt-get install -y python3 python3-venv curl
+apt-get install -y python3 python3-venv curl jq
 
-# 5. Python venv 생성 + 패키지 설치
+# 5. Python venv + 패키지
 python3 -m venv "${REPO_DIR}/venv"
 source "${REPO_DIR}/venv/bin/activate"
 pip install --upgrade pip
@@ -56,33 +66,43 @@ deactivate
 
 # 6. .env 자동 생성
 if [[ ! -f "${ETC_DIR}/.env" ]]; then
-  echo "[*] .env 파일 없음 → 솔루션 서버에서 값 가져오는 중..."
+  echo "[*] .env 파일 없음 → 서버에 agent 등록 시도 중..."
+
   HOSTNAME=$(hostname)
-  REGISTER_URL="http://192.168.67.131:8000/api/agent-register?hostname=${HOSTNAME}"
-  RESPONSE=$(curl -s --fail "${REGISTER_URL}") || {
-    echo " .env 자동 생성 실패. 서버 연결 안됨."
+  REGISTER_URL="${CONTROLLER_URL}/api/agent-register"
+
+  JSON_PAYLOAD=$(cat <<EOF
+{
+  "client_id": "${CLIENT_ID}",
+  "host": "${HOSTNAME}",
+  "agent_version": "${AGENT_VERSION}",
+  "secret_proof": "${BOOTSTRAP_SECRET}"
+}
+EOF
+)
+
+  RESPONSE=$(curl -s --fail -X POST "$REGISTER_URL" \
+    -H "Content-Type: application/json" \
+    -d "${JSON_PAYLOAD}") || {
+    echo "[FATAL] agent-register 요청 실패. 서버 연결 확인 필요."
     exit 1
   }
 
-  ENDPOINT=$(echo "$RESPONSE" | grep -oP '"endpoint"\s*:\s*"\K[^"]+')
-  TOKEN=$(echo "$RESPONSE" | grep -oP '"token"\s*:\s*"\K[^"]+')
-
-  if [[ -z "$ENDPOINT" || -z "$TOKEN" ]]; then
-    echo "[ERROR] endpoint 또는 token 누락"
+  TOKEN=$(echo "$RESPONSE" | jq -r '.access_token')
+  if [[ -z "$TOKEN" || "$TOKEN" == "null" ]]; then
+    echo "[FATAL] 서버 응답에 access_token 없음. 응답: $RESPONSE"
     exit 1
   fi
 
   cat <<EOF > "${ETC_DIR}/.env"
-INGEST_ENDPOINT=${ENDPOINT}
-INGEST_TOKEN=${TOKEN}
-CONTROLLER_URL=http://192.168.67.131:8000
+CONTROLLER_URL=${CONTROLLER_URL}
 AGENT_TOKEN=${TOKEN}
 EOF
+
+  chmod 600 "${ETC_DIR}/.env"
+  chown root:root "${ETC_DIR}/.env"
   echo "[+] .env 생성 완료"
 fi
-
-chmod 600 "${ETC_DIR}/.env"
-chown root:root "${ETC_DIR}/.env"
 
 # 7. agent.yaml 확인
 if [[ ! -f "${ETC_DIR}/agent.yaml" ]]; then
@@ -90,13 +110,13 @@ if [[ ! -f "${ETC_DIR}/agent.yaml" ]]; then
   exit 1
 fi
 
-# 8. agent.yaml 복사 및 권한
+# 8. agent.yaml 배포
 cp "${ETC_DIR}/agent.yaml" "${AGENT_HOME}/agent.yaml"
 chown -R "${AGENT_USER}:nogroup" "${AGENT_HOME}" /var/lib/otelcol-contrib /var/lib/secure-log-agent
 chmod 750 "${AGENT_HOME}"
 chmod 640 "${AGENT_HOME}/agent.yaml"
 
-# 9. 서비스 유닛 배포
+# 9. systemd 서비스 배포
 cp "${ETC_DIR}/otel-agent.service" "${SYSTEMD_DIR}/otel-agent.service"
 cp "${REPO_DIR}/forwarder/secure-forwarder.service" "${SYSTEMD_DIR}/secure-forwarder.service"
 cp "${REPO_DIR}/agent/agent-controller.service" "${SYSTEMD_DIR}/agent-controller.service"
@@ -111,7 +131,7 @@ systemctl restart otel-agent.service
 systemctl restart secure-forwarder.service
 systemctl restart agent-controller.service
 
-# 11. 상태 출력
+# 11. 상태 확인
 echo
 echo "[*] 서비스 상태 요약:"
 systemctl --no-pager --full status otel-agent.service | sed -n '1,5p'
@@ -120,3 +140,4 @@ systemctl --no-pager --full status agent-controller.service | sed -n '1,5p'
 
 echo
 echo "[+] 설치 완료. 서비스 실행 중입니다."
+
