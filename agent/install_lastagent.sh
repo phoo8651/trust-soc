@@ -15,105 +15,101 @@ set -euo pipefail
 #   - AGENT_USER : OTEL 에이전트를 실행할 시스템 계정명
 #   - AGENT_HOME : OTEL 에이전트 설정/상태 디렉터리
 
-# 사용자 환경 설정
-LAST_USER="last"                                 # 리눅스 사용자명
-REPO_DIR="/home/${LAST_USER}/lastagent"          # 코드 디렉토리
-AGENT_USER="otel-agent"                          # 에이전트 실행 계정
-AGENT_HOME="/etc/secure-log-agent"               # 설정 디렉토리
-
+# 사용자 정의 변수
+LAST_USER="last"
+REPO_DIR="/home/${LAST_USER}/lastagent"
+AGENT_USER="otel-agent"
+AGENT_HOME="/etc/secure-log-agent"
 ETC_DIR="${REPO_DIR}/etc"
 SYSTEMD_DIR="/etc/systemd/system"
 
-# 1. 루트 권한 확인
+echo "설치 시작:"
+
+# 1. root 권한 확인
 if [[ "${EUID}" -ne 0 ]]; then
-  echo " 루트 권한으로 실행해야 합니다. sudo로 실행하세요."
+  echo "root 권한으로 실행해야 합니다. (예: sudo bash install_agent_stack.sh)"
   exit 1
 fi
 
-echo "설치 시작"
+# 2. 필수 디렉토리 생성 및 권한 설정
+mkdir -p /var/lib/secure-log-agent/queue "${AGENT_HOME}/remote.d" /var/lib/otelcol-contrib "${REPO_DIR}" "${ETC_DIR}"
+chown -R "${AGENT_USER}:nogroup" /var/lib/secure-log-agent || true
 
-# 2. 시스템 패키지 설치
+# 3. Python 및 venv 설치
+echo "Python 환경 확인"
 apt-get update
 apt-get install -y python3 python3-venv curl
 
-# 3. 에이전트 계정 생성
-if ! id -u "${AGENT_USER}" >/dev/null 2>&1; then
-  echo "시스템 계정 생성: ${AGENT_USER}"
-  useradd --system --no-create-home \
-    --home "${AGENT_HOME}" \
-    --shell /usr/sbin/nologin \
-    "${AGENT_USER}"
+VENVDIR="${REPO_DIR}/venv"
+if [[ ! -d "${VENVDIR}" ]]; then
+  python3 -m venv "${VENVDIR}"
 fi
 
-# 4. 디렉토리 생성
-mkdir -p "${AGENT_HOME}/remote.d"
-mkdir -p /var/lib/secure-log-agent/queue
-mkdir -p /var/lib/otelcol-contrib
-mkdir -p "${ETC_DIR}"
-
-# 5. 권한 설정
-chown -R ${AGENT_USER}:nogroup "${AGENT_HOME}" /var/lib/secure-log-agent /var/lib/otelcol-contrib
-chmod 750 "${AGENT_HOME}"
-chmod 700 /var/lib/secure-log-agent/queue
-
-# 6. Python venv 및 라이브러리
-echo "Python 가상환경 구성"
-VENVDIR="${REPO_DIR}/venv"
-python3 -m venv "${VENVDIR}"
 source "${VENVDIR}/bin/activate"
 pip install --upgrade pip
 pip install requests PyYAML
 deactivate
 
-# 7. .env 생성 (서버 응답 기반)
+# 4. .env 자동 생성
+echo ".env 확인 및 자동 생성 시도"
 if [[ ! -f "${ETC_DIR}/.env" ]]; then
-  echo " .env 자동 생성 시도 중..."
-
   HOSTNAME=$(hostname)
   REGISTER_URL="http://192.168.67.131:8000/api/agent-register?hostname=${HOSTNAME}"
-  RESPONSE=$(curl -s --fail "${REGISTER_URL}") || {
-    echo "서버 연결 실패. .env 수동 생성 필요."
-    exit 1
-  }
+  RESPONSE=$(curl -s --fail "${REGISTER_URL}") || true
 
   ENDPOINT=$(echo "$RESPONSE" | grep -oP '"endpoint"\s*:\s*"\K[^"]+')
   TOKEN=$(echo "$RESPONSE" | grep -oP '"token"\s*:\s*"\K[^"]+')
 
-  if [[ -z "$ENDPOINT" || -z "$TOKEN" ]]; then
-    echo "서버 응답에 endpoint 또는 token이 없습니다."
-    exit 1
-  fi
-
-  cat <<EOF > "${ETC_DIR}/.env"
+  if [[ -n "$ENDPOINT" && -n "$TOKEN" ]]; then
+    cat <<EOF > "${ETC_DIR}/.env"
 INGEST_ENDPOINT=${ENDPOINT}
 INGEST_TOKEN=${TOKEN}
+CONTROLLER_URL=http://192.168.67.131:8000
+AGENT_TOKEN=${TOKEN}
+AGENT_ID=${HOSTNAME}
 EOF
-
-  chmod 600 "${ETC_DIR}/.env"
-  chown root:root "${ETC_DIR}/.env"
-
-  echo ".env 파일 생성 완료"
+    echo " .env 자동 생성 완료"
+  else
+    echo " 자동 생성 실패. ${REGISTER_URL} 확인 필요"
+    exit 1
+  fi
 fi
 
-# 8. agent.yaml 복사
-if [[ -f "${ETC_DIR}/agent.yaml" ]]; then
-  cp "${ETC_DIR}/agent.yaml" "${AGENT_HOME}/agent.yaml"
-  chown ${AGENT_USER}:nogroup "${AGENT_HOME}/agent.yaml"
-  chmod 640 "${AGENT_HOME}/agent.yaml"
-else
+chmod 600 "${ETC_DIR}/.env"
+chown root:root "${ETC_DIR}/.env"
+
+# 5. agent.yaml 확인
+if [[ ! -f "${ETC_DIR}/agent.yaml" ]]; then
   echo " ${ETC_DIR}/agent.yaml 파일이 없습니다."
   exit 1
 fi
 
-# 9. systemd 서비스 설치
-echo "systemd 서비스 파일 복사"
-cp "${ETC_DIR}/otel-agent.service"                 "${SYSTEMD_DIR}/otel-agent.service"
+# 6. 시스템 사용자 생성
+if ! id -u "${AGENT_USER}" >/dev/null 2>&1; then
+  useradd --system --no-create-home --home "${AGENT_HOME}" --shell /usr/sbin/nologin "${AGENT_USER}"
+fi
+
+# 7. 설정 복사 및 권한
+cp "${ETC_DIR}/agent.yaml" "${AGENT_HOME}/agent.yaml"
+chown -R "${AGENT_USER}:nogroup" "${AGENT_HOME}" /var/lib/otelcol-contrib
+chmod 750 "${AGENT_HOME}"
+chmod 640 "${AGENT_HOME}/agent.yaml"
+
+# 8. systemd 서비스 등록
+echo " systemd 서비스 등록"
+
+cp "${ETC_DIR}/otel-agent.service" "${SYSTEMD_DIR}/otel-agent.service"
 cp "${REPO_DIR}/forwarder/secure-forwarder.service" "${SYSTEMD_DIR}/secure-forwarder.service"
-cp "${REPO_DIR}/agent/agent-controller.service"     "${SYSTEMD_DIR}/agent-controller.service"
+cp "${REPO_DIR}/agent/agent-controller.service" "${SYSTEMD_DIR}/agent-controller.service"
 
-# 10. systemd 서비스 등록 및 시작
 systemctl daemon-reload
-systemctl enable otel-agent.service secure-forwarder.service agent-controller.service
-systemctl restart otel-agent.service secure-forwarder.service agent-controller.service
+systemctl enable otel-agent.service || true
+systemctl enable secure-forwarder.service || true
+systemctl enable agent-controller.service || true
 
-echo "설치 및 서비스 시작 완료!"
+# 9. 서비스 시작
+systemctl restart otel-agent.service
+systemctl restart secure-forwarder.service
+systemctl restart agent-controller.service
+
+echo "설치 완료"
