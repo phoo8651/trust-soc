@@ -15,75 +15,66 @@ set -euo pipefail
 #   - AGENT_USER : OTEL 에이전트를 실행할 시스템 계정명
 #   - AGENT_HOME : OTEL 에이전트 설정/상태 디렉터리
 
-#  [사용자 환경에 맞게 수정 가능한 변수] 
-LAST_USER="last"                           # 코드가 위치한 계정명
-REPO_DIR="/home/${LAST_USER}/lastagent"    # 리포지토리 루트
-AGENT_USER="otel-agent"                    # OTEL 에이전트용 시스템 계정
-AGENT_HOME="/etc/secure-log-agent"         # OTEL 에이전트 설정 디렉터리
-
-
-# 디렉토리 생성 및 권한 설정
-mkdir -p /var/lib/secure-log-agent/queue
-chown -R otel-agent:nogroup /var/lib/secure-log-agent
+# 사용자 환경 설정
+LAST_USER="last"                                 # 리눅스 사용자명
+REPO_DIR="/home/${LAST_USER}/lastagent"          # 코드 디렉토리
+AGENT_USER="otel-agent"                          # 에이전트 실행 계정
+AGENT_HOME="/etc/secure-log-agent"               # 설정 디렉토리
 
 ETC_DIR="${REPO_DIR}/etc"
 SYSTEMD_DIR="/etc/systemd/system"
 
-# ===== root 확인 =====
+# 1. 루트 권한 확인
 if [[ "${EUID}" -ne 0 ]]; then
-  echo "이 스크립트는 root 권한으로 실행해야 합니다."
-  echo "  예시) sudo bash install_lastagent.sh"
+  echo " 루트 권한으로 실행해야 합니다. sudo로 실행하세요."
   exit 1
 fi
 
-echo "lastagent 자동 설치 시작"
+echo "설치 시작"
 
-# 필수 패키지 설치
-echo " 시스템 패키지 설치 확인 (python3, python3-venv)"
-if ! command -v python3 >/dev/null 2>&1; then
-  apt-get update
-  apt-get install -y python3
-fi
-if ! python3 -m venv --help >/dev/null 2>&1; then
-  apt-get update
-  apt-get install -y python3-venv
-fi
+# 2. 시스템 패키지 설치
+apt-get update
+apt-get install -y python3 python3-venv curl
 
-# 리포지토리 경로 확인
-echo " 리포지토리 경로 확인: ${REPO_DIR}"
-if [[ ! -d "${REPO_DIR}" ]]; then
-  echo "[FATAL] ${REPO_DIR} 디렉터리가 없습니다."
-  echo "  -> 먼저 서버에 lastagent 코드를 git clone 또는 scp로 배포한 뒤 다시 실행하세요."
-  exit 1
+# 3. 에이전트 계정 생성
+if ! id -u "${AGENT_USER}" >/dev/null 2>&1; then
+  echo "시스템 계정 생성: ${AGENT_USER}"
+  useradd --system --no-create-home \
+    --home "${AGENT_HOME}" \
+    --shell /usr/sbin/nologin \
+    "${AGENT_USER}"
 fi
 
-# venv 생성 + 패키지 설치
-echo "Python venv 생성 및 패키지 설치"
+# 4. 디렉토리 생성
+mkdir -p "${AGENT_HOME}/remote.d"
+mkdir -p /var/lib/secure-log-agent/queue
+mkdir -p /var/lib/otelcol-contrib
+mkdir -p "${ETC_DIR}"
+
+# 5. 권한 설정
+chown -R ${AGENT_USER}:nogroup "${AGENT_HOME}" /var/lib/secure-log-agent /var/lib/otelcol-contrib
+chmod 750 "${AGENT_HOME}"
+chmod 700 /var/lib/secure-log-agent/queue
+
+# 6. Python venv 및 라이브러리
+echo "Python 가상환경 구성"
 VENVDIR="${REPO_DIR}/venv"
-if [[ ! -d "${VENVDIR}" ]]; then
-  python3 -m venv "${VENVDIR}"
-fi
-# shellcheck source=/dev/null
+python3 -m venv "${VENVDIR}"
 source "${VENVDIR}/bin/activate"
 pip install --upgrade pip
 pip install requests PyYAML
 deactivate
 
-# ===== .env 및 agent.yaml 확인 =====
-echo " 설정 파일(.env, agent.yaml) 확인"
-
+# 7. .env 생성 (서버 응답 기반)
 if [[ ! -f "${ETC_DIR}/.env" ]]; then
-  echo "[ .env 파일이 없어 솔루션 서버에 등록 요청을 보냅니다..."
+  echo " .env 자동 생성 시도 중..."
 
   HOSTNAME=$(hostname)
-  REGISTER_URL="https://your-solution-server/api/agent-register?hostname=${HOSTNAME}"
-
-  RESPONSE=$(curl -s --fail "${REGISTER_URL}")
-
-if [[ $? -ne 0 ]]; then
-  echo "[ERROR] 솔루션 서버 연결 실패. 네트워크/방화벽 확인 필요."
-  exit 1
-fi
+  REGISTER_URL="http://192.168.67.131:8000/api/agent-register?hostname=${HOSTNAME}"
+  RESPONSE=$(curl -s --fail "${REGISTER_URL}") || {
+    echo "서버 연결 실패. .env 수동 생성 필요."
+    exit 1
+  }
 
   ENDPOINT=$(echo "$RESPONSE" | grep -oP '"endpoint"\s*:\s*"\K[^"]+')
   TOKEN=$(echo "$RESPONSE" | grep -oP '"token"\s*:\s*"\K[^"]+')
@@ -98,67 +89,31 @@ INGEST_ENDPOINT=${ENDPOINT}
 INGEST_TOKEN=${TOKEN}
 EOF
 
-  echo ".env 파일 자동 생성 완료"
+  chmod 600 "${ETC_DIR}/.env"
+  chown root:root "${ETC_DIR}/.env"
+
+  echo ".env 파일 생성 완료"
 fi
 
-# .env 권한 설정
-chmod 600 "${ETC_DIR}/.env"
-chown root:root "${ETC_DIR}/.env"
-
-if [[ ! -f "${ETC_DIR}/agent.yaml" ]]; then
-  echo "[FATAL] ${ETC_DIR}/agent.yaml 파일이 없습니다."
+# 8. agent.yaml 복사
+if [[ -f "${ETC_DIR}/agent.yaml" ]]; then
+  cp "${ETC_DIR}/agent.yaml" "${AGENT_HOME}/agent.yaml"
+  chown ${AGENT_USER}:nogroup "${AGENT_HOME}/agent.yaml"
+  chmod 640 "${AGENT_HOME}/agent.yaml"
+else
+  echo " ${ETC_DIR}/agent.yaml 파일이 없습니다."
   exit 1
 fi
 
-# OTEL 에이전트 시스템 계정 준비
-echo " otel-agent 시스템 계정 및 디렉터리 준비"
-if ! id -u "${AGENT_USER}" >/dev/null 2>&1; then
-  useradd --system --no-create-home \
-    --home "${AGENT_HOME}" \
-    --shell /usr/sbin/nologin \
-    "${AGENT_USER}"
-fi
-
-mkdir -p "${AGENT_HOME}/remote.d" /var/lib/otelcol-contrib
-
-# OTEL 설정 복사 및 권한
-cp "${ETC_DIR}/agent.yaml" "${AGENT_HOME}/agent.yaml"
-chown -R "${AGENT_USER}:nogroup" "${AGENT_HOME}" /var/lib/otelcol-contrib
-chmod 750 "${AGENT_HOME}"
-chmod 640 "${AGENT_HOME}/agent.yaml"
-
-# systemd 서비스 복사
-echo " systemd 서비스 파일 복사"
+# 9. systemd 서비스 설치
+echo "systemd 서비스 파일 복사"
 cp "${ETC_DIR}/otel-agent.service"                 "${SYSTEMD_DIR}/otel-agent.service"
 cp "${REPO_DIR}/forwarder/secure-forwarder.service" "${SYSTEMD_DIR}/secure-forwarder.service"
 cp "${REPO_DIR}/agent/agent-controller.service"     "${SYSTEMD_DIR}/agent-controller.service"
 
+# 10. systemd 서비스 등록 및 시작
 systemctl daemon-reload
+systemctl enable otel-agent.service secure-forwarder.service agent-controller.service
+systemctl restart otel-agent.service secure-forwarder.service agent-controller.service
 
-systemctl enable secure-forwarder.service || true
-systemctl enable agent-controller.service || true
-systemctl enable otel-agent.service || true
-
-# 서비스 시작
-echo " 서비스 시작"
-systemctl restart secure-forwarder.service
-systemctl restart agent-controller.service
-systemctl restart otel-agent.service
-
-echo
-systemctl --no-pager --full status secure-forwarder.service | sed -n '1,5p' || true
-systemctl --no-pager --full status agent-controller.service    | sed -n '1,5p' || true
-systemctl --no-pager --full status otel-agent.service          | sed -n '1,5p' || true
-
-echo
-echo "lastagent 스택 자동 설치 완료."
-echo "  - 설정 파일: ${ETC_DIR}/.env, ${AGENT_HOME}/agent.yaml"
-echo "  - 서비스 상태 확인:"
-echo "      sudo systemctl status secure-forwarder.service"
-echo "      sudo systemctl status agent-controller.service"
-echo "      sudo systemctl status otel-agent.service"
-
-echo "  - 서비스 상태 확인:"
-echo "      sudo systemctl status secure-forwarder.service"
-echo "      sudo systemctl status agent-controller.service"
-echo "      sudo systemctl status otel-agent.service"
+echo "설치 및 서비스 시작 완료!"
