@@ -30,11 +30,11 @@ CLIENT_ID="default"
 
 # ──────────────────────────────────────────────
 # 컨트롤러(솔루션 서버) 위치
-# 쿠버네티스 NodePort 9000 기준
-#   예: http://<노드 IP>:9000
+#  - 백엔드: http://192.168.67.131:8000
+#  - AgentRegister: /auth/register
 # ──────────────────────────────────────────────
 CONTROLLER_HOST="192.168.67.131"
-CONTROLLER_PORT="9000"
+CONTROLLER_PORT="8000"
 CONTROLLER_URL="http://${CONTROLLER_HOST}:${CONTROLLER_PORT}"
 
 echo "[*] agent 설치 시작"
@@ -51,7 +51,7 @@ mkdir -p "${AGENT_HOME}/remote.d"
 mkdir -p /var/lib/otelcol-contrib
 mkdir -p /var/lib/secure-log-agent/queue
 
-# 3. 시스템 계정 생성 (otelcol 전용 계정, 지금은 서비스에서 root로 돌리더라도 남겨둠)
+# 3. 시스템 계정 생성 (otelcol 전용 계정, 서비스는 지금 root로 돌리더라도 남겨둠)
 if ! id -u "${AGENT_USER}" >/dev/null 2>&1; then
   useradd --system --no-create-home --home "${AGENT_HOME}" --shell /usr/sbin/nologin "${AGENT_USER}"
 fi
@@ -73,7 +73,7 @@ if [[ ! -f "${ETC_DIR}/.env" ]]; then
   echo "[*] .env 파일 없음 → 서버에 agent 등록 시도 중..."
 
   HOSTNAME=$(hostname)
-  REGISTER_URL="${CONTROLLER_URL}/api/agent-register"
+  REGISTER_URL="${CONTROLLER_URL}/auth/register"
 
   JSON_PAYLOAD=$(cat <<EOF
 {
@@ -88,20 +88,30 @@ EOF
   RESPONSE=$(curl -s --fail -X POST "$REGISTER_URL" \
     -H "Content-Type: application/json" \
     -d "${JSON_PAYLOAD}") || {
-    echo "[ERROR] agent-register 요청 실패. 서버 연결/포트(${CONTROLLER_URL})를 확인하세요."
+    echo "[ERROR] agent-register 요청 실패."
+    echo "        서버가 열려 있는지, 포트/경로(${REGISTER_URL})가 맞는지 확인하세요."
     exit 1
   }
 
-  TOKEN=$(echo "$RESPONSE" | jq -r '.access_token')
-  if [[ -z "$TOKEN" || "$TOKEN" == "null" ]]; then
+  # 서버 응답(JSON)에서 필드 추출
+  AGENT_ID=$(echo "$RESPONSE"        | jq -r '.agent_id // empty')
+  ACCESS_TOKEN=$(echo "$RESPONSE"    | jq -r '.access_token // empty')
+  REFRESH_TOKEN=$(echo "$RESPONSE"   | jq -r '.refresh_token // empty')
+  EXPIRES_IN=$(echo "$RESPONSE"      | jq -r '.expires_in // empty')
+
+  if [[ -z "$ACCESS_TOKEN" || "$ACCESS_TOKEN" == "null" ]]; then
     echo "[ERROR] 서버 응답에 access_token 필드가 없습니다."
     echo "        응답 내용: $RESPONSE"
     exit 1
   fi
 
   cat <<EOF > "${ETC_DIR}/.env"
+# lastagent 자동 등록으로 생성된 파일
 CONTROLLER_URL=${CONTROLLER_URL}
-AGENT_TOKEN=${TOKEN}
+AGENT_ID=${AGENT_ID}
+AGENT_TOKEN=${ACCESS_TOKEN}
+AGENT_REFRESH_TOKEN=${REFRESH_TOKEN}
+AGENT_TOKEN_EXPIRES_IN=${EXPIRES_IN}
 EOF
 
   chmod 600 "${ETC_DIR}/.env"
