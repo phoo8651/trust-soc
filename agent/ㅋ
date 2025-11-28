@@ -35,4 +35,12 @@ sudo cp /home/Last/Lastagent/agent.yaml /etc/secure-log-agent/agent.yaml
 sudo chown otel-agent:nogroup /etc/secure-log-agent/agent.yaml
 sudo chmod 640 /etc/secure-log-agent/agent.yaml
 
+sudo cp /home/Last/Lastagent/etc/agent.yaml /etc/secure-log-agent/agent.yaml
+sudo chown otel-agent:nogroup /etc/secure-log-agent/agent.yaml
+sudo chmod 640 /etc/secure-log-agent/agent.yaml
+sudo -u otel-agent /usr/local/bin/otelcol-contrib \
+  --config=/etc/secure-log-agent/agent.yaml \
+  --config=/etc/secure-log-agent/remote.d/remote.yaml
+
+
 
