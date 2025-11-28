@@ -1,1 +1,41 @@
-sudo systemctl status otel-agent.service secure-forwarder.service agent-controller.service -n 5
+[Unit]
+Description=Secure Log Forwarder (HMAC gate for /v1/logs)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root  # 19000 포트 listen + 간단해서 root 유지 (추후 전용 계정 분리 가능)
+
+WorkingDirectory=/home/last/lastagent/forwarder
+
+EnvironmentFile=/home/last/lastagent/etc/.env
+
+ExecStart=/home/last/lastagent/venv/bin/python /home/last/lastagent/forwarder/secure-forwarder.py
+
+Restart=always
+RestartSec=3
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+#ProtectHome=true    # /home 접근 막혀서 문제될 수 있으니 필요할 때만 켜기
+ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+PrivateDevices=true
+
+ReadOnlyPaths=/home/last/lastagent/forwarder
+
+[Install]
+WantedBy=multi-user.target
+
+sudo cp /home/last/lastagent/forwarder/secure-forwarder.service /etc/systemd/system/secure-forwarder.service
+sudo systemctl daemon-reload
+sudo systemctl restart secure-forwarder.service
+sudo systemctl status secure-forwarder.service -n 10
