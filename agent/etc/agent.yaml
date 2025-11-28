@@ -18,7 +18,7 @@ extensions:
     # 큐/오프셋 파일을 저장할 디렉터리
     directory: /var/lib/secure-log-agent/queue
     # 디렉터리가 없으면 자동 생성
-    create_directory: true
+    #create_directory: true
 
 receivers:
   # filelog: 파일을 tail 하면서 로그를 수집하는 리시버
