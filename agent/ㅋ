@@ -22,3 +22,8 @@ sudo chmod +x /usr/local/bin/otelcol-contrib
 sudo nano /etc/systemd/system/otel-agent.service
 
 journalctl -xeu otel-agent.service --no-pager | tail -n 30
+
+
+sudo -u otel-agent /usr/local/bin/otelcol-contrib \
+  --config=/etc/secure-log-agent/agent.yaml \
+  --config=/etc/secure-log-agent/remote.d/remote.yaml
