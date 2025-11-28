@@ -1,9 +1,11 @@
+# /etc/secure-log-agent/agent.yaml
+
 # OpenTelemetry Collector 기반 로그 에이전트 설정
 # 역할:
-# 1) nginx access 로그를 tail 해서 읽는다.
+# 1) nginx / text4shell / PoC 컨테이너 로그 파일을 tail 해서 읽는다.
 # 2) IPv4 주소를 단순 마스킹한다.
 # 3) batch + 디스크 큐로 안정적으로 전송한다.
-# 4) OTLP/HTTP로 별도 수집 서버(또는 secure-forwarder)에 전송한다.
+# 4) OTLP/HTTP 로 secure-forwarder(ingest 엔드포인트)에 전송한다.
 #    - 서버 주소/토큰은 환경변수 INGEST_ENDPOINT / INGEST_TOKEN 으로만 받는다.
 
 extensions:
@@ -12,16 +14,15 @@ extensions:
     # 디스크 기반 큐/오프셋 저장소
     directory: /var/lib/secure-log-agent/queue
     create_directory: true
-    # sudo chown -R otel-agent:nogroup /var/lib/secure-log-agent < 입력해야 쓰기 권한 받게 되어 있습니다. 자동쉘에 포함 되어있음
 
 receivers:
   filelog:
     include:
       - /var/log/nginx/access.log
-      - /var/log/text4shell/app.log    # ← Text4Shell 기본 경로 추가
-      - /var/log/containers/*_poc-lab_*.log   # poc-lab 네임스페이스의 PoC 컨테이너 로그
+      - /var/log/text4shell/application.log     # ← 실제 text4shell 로그 경로
+      - /var/log/containers/*_poc-lab_*.log     # (있으면) poc-lab 네임스페이스 컨테이너 로그
     start_at: end
-    storage: file_storage  # file_storage extensions 사용
+    storage: file_storage   # file_storage extensions 사용
 
 processors:
   memory_limiter:
@@ -38,15 +39,18 @@ processors:
     log_statements:
       - context: log
         statements:
+          # IPv4 주소는 전부 [ip_redacted] 로 마스킹
           - replace_pattern(body, "([0-9]{1,3}\\.){3}[0-9]{1,3}", "[ip_redacted]")
 
 exporters:
   otlphttp:
     # secure-forwarder 또는 ingest 서버 주소
+    # 예시: INGEST_ENDPOINT=http://127.0.0.1:19000
     endpoint: ${env:INGEST_ENDPOINT}
     logs_endpoint: /v1/logs
-#인게스트 넘기는 부분들 
+
     headers:
+      # 예시: INGEST_TOKEN=dev_local_agent_token
       Authorization: "Bearer ${env:INGEST_TOKEN}"
 
     sending_queue:
@@ -59,7 +63,7 @@ exporters:
       enabled: true
       initial_interval: 1s
       max_interval: 30s
-      max_elapsed_time: 0s
+      max_elapsed_time: 0s  # 무제한 retry
 
   debug:
     verbosity: basic
@@ -67,7 +71,7 @@ exporters:
 service:
   telemetry:
     metrics:
-      address: 0.0.0.0:8889
+      level: none
 
   extensions:
     - health_check
@@ -75,7 +79,8 @@ service:
 
   pipelines:
     logs:
-      receivers: [filelog]
+      receivers:
+        - filelog
       processors:
         - memory_limiter
         - transform/pii_mask
