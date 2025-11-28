@@ -1,3 +1,17 @@
-sudo mkdir -p /etc/secure-log-agent/remote.d
+# agent.yaml: 환경변수 기반 설정 분리
+receivers:
+  otlp:
+    protocols:
+      http:
 
-sudo nano /etc/secure-log-agent/agent.yaml
+exporters:
+  otlphttp:
+    endpoint: ${INGEST_ENDPOINT}
+    headers:
+      Authorization: "Bearer ${INGEST_TOKEN}"
+
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      exporters: [otlphttp]
