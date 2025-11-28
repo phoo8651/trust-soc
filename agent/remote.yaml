@@ -1,0 +1,44 @@
+extensions:
+  file_storage:
+    directory: /var/lib/secure-log-agent/queue
+    create_directory: true
+
+receivers:
+  filelog:
+    include:
+      - /var/log/nginx/access.log
+      - /var/log/text4shell/app.log
+    start_at: end
+    storage: file_storage
+
+processors:
+  transform/pii_mask:
+    log_statements:
+      - context: log
+        statements:
+          - replace_pattern(body, "([0-9]{1,3}\\.){3}[0-9]{1,3}", "[ip_redacted]")
+  batch:
+
+exporters:
+  otlphttp:
+    endpoint: ${INGEST_ENDPOINT}
+    logs_endpoint: /v1/logs
+    headers:
+      Authorization: "Bearer ${INGEST_TOKEN}"
+    sending_queue:
+      enabled: true
+      storage: file_storage
+      num_consumers: 4
+      queue_size: 262144
+    retry_on_failure:
+      enabled: true
+
+  debug:
+
+service:
+  extensions: [file_storage]
+  pipelines:
+    logs:
+      receivers: [filelog]
+      processors: [transform/pii_mask, batch]
+      exporters: [otlphttp, debug]
