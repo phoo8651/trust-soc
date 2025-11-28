@@ -48,12 +48,8 @@ RAG 기반 지식 추출 → 마스킹 → 증거 기반 매핑 → LLM 요약/�
 - allow/deny list 지원
 - LLM fallback hybrid 전략 지원
 
-### 2.4 Model Gateway
-- Local Llama.cpp 모델 우선 호출
-- 실패 시 DummyLLM fallback
-- token usage / duration metrics 기록
 
-### 2.5 HIL(Approval) System
+### 2.4 HIL(Approval) System
 - Confidence < 0.80 → HIL 필요
 - Webhook 서명(HMAC-SHA256) + Timestamp + 재시도 백오프
 - Idempotency Key 기반 중복 전송 방지
@@ -74,8 +70,6 @@ Attack Mapper
 ↓
 Prompt Manager (summary/response)
 ↓
-Model Gateway (local LLM → fallback)
-↓
 Response Normalizer / Guardrail
 ↓
 Confidence Decision
@@ -95,16 +89,9 @@ FastAPI ← ModelGateway(LocalLlamaLLM)
 Mistral-7B-Instruct-v0.2
 
 
-### Gateway mode
-FastAPI → External Model Gateway
-↓
-Local LLM fallback
-
----
-
 ## 5. Data Storage
 - RAG 문서: 메모리 인덱스(InMemory or FAISS)
-- Incident 저장: In-memory dict (PoC)
+- Incident 저장(/analyze 내부에서만): In-memory dict
 - Idempotency Key: In-memory dict (PoC)
 
 ---
@@ -113,10 +100,6 @@ Local LLM fallback
 - Evidence schema validation
 - HMAC Signature verification
 - Timestamp anti-replay
-- RAG poison 방지(요약 압축)
 - Prompt Injection Guardrail
 
 ---
-
-## Appendix
-아키텍처는 추후 Redis 기반 Incident Store 및 MongoDB 기반 Evidence Store 확장이 가능하다.
