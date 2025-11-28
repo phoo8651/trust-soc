@@ -15,3 +15,10 @@ sudo chown -R otel-agent:nogroup /etc/secure-log-agent
 sudo chown -R otel-agent:nogroup /var/lib/secure-log-agent
 sudo chmod -R 750 /etc/secure-log-agent
 sudo chmod -R 750 /var/lib/secure-log-agent
+
+sudo chown root:otel-agent /usr/local/bin/otelcol-contrib
+sudo chmod +x /usr/local/bin/otelcol-contrib
+
+sudo nano /etc/systemd/system/otel-agent.service
+
+journalctl -xeu otel-agent.service --no-pager | tail -n 30
