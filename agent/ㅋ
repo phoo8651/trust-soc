@@ -1,2 +1,8 @@
 ls -l /etc/secure-log-agent
 ls -l /etc/secure-log-agent/remote.d
+
+
+sudo systemctl daemon-reexec
+sudo systemctl daemon-reload
+sudo systemctl restart otel-agent.service
+sudo systemctl status otel-agent.service -n 20
