@@ -45,7 +45,7 @@ exporters:
     # secure-forwarder 또는 ingest 서버 주소
     endpoint: ${env:INGEST_ENDPOINT}
     logs_endpoint: /v1/logs
-
+#인게스트 넘기는 부분들 
     headers:
       Authorization: "Bearer ${env:INGEST_TOKEN}"
 
