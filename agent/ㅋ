@@ -1,0 +1,9 @@
+# 유저 제거 (있다면)
+sudo userdel -r otel-agent 2>/dev/null
+sudo groupdel otel-agent 2>/dev/null
+
+# 유저와 그룹 생성
+sudo useradd --system --no-create-home \
+  --home /etc/secure-log-agent \
+  --shell /usr/sbin/nologin \
+  otel-agent
