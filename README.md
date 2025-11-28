@@ -1,4 +1,2 @@
-sudo chown otel-agent:otel-agent /usr/local/bin/otelcol-contrib
-
-
-sudo chmod 755 /usr/local/bin/otelcol-contrib
+sudo chown -R otel-agent:otel-agent /etc/secure-log-agent
+sudo chmod -R 750 /etc/secure-log-agent
