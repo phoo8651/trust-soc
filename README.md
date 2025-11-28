@@ -1,4 +1,5 @@
 # agent.yaml: 환경변수 기반 설정 분리
+
 receivers:
   otlp:
     protocols:
