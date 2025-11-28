@@ -1,2 +1,4 @@
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-NoNewPrivileges=true
+sudo chown otel-agent:otel-agent /usr/local/bin/otelcol-contrib
+
+
+sudo chmod 755 /usr/local/bin/otelcol-contrib
