@@ -13,3 +13,7 @@ systemctl status otel-agent.service secure-forwarder.service agent-controller.se
 
 sudo systemctl restart otel-agent.service secure-forwarder.service agent-controller.service
 sudo systemctl status otel-agent.service secure-forwarder.service agent-controller.service -n 5
+
+mv /home/last/lastagent/etc/.env /home/last/lastagent/etc/.env.bak
+cd /home/last/lastagent
+sudo bash install_lastagent.sh
