@@ -1,46 +1,4 @@
-# 유저 제거 (있다면)
-sudo userdel -r otel-agent 2>/dev/null
-sudo groupdel otel-agent 2>/dev/null
-
-# 유저와 그룹 생성
-sudo useradd --system --no-create-home \
-  --home /etc/secure-log-agent \
-  --shell /usr/sbin/nologin \
-  otel-agent
-
-sudo mkdir -p /etc/secure-log-agent/remote.d
-sudo mkdir -p /var/lib/secure-log-agent/queue
-
-sudo chown -R otel-agent:nogroup /etc/secure-log-agent
-sudo chown -R otel-agent:nogroup /var/lib/secure-log-agent
-sudo chmod -R 750 /etc/secure-log-agent
-sudo chmod -R 750 /var/lib/secure-log-agent
-
-sudo chown root:otel-agent /usr/local/bin/otelcol-contrib
-sudo chmod +x /usr/local/bin/otelcol-contrib
-
-sudo nano /etc/systemd/system/otel-agent.service
-
-journalctl -xeu otel-agent.service --no-pager | tail -n 30
-
-
-sudo -u otel-agent /usr/local/bin/otelcol-contrib \
-  --config=/etc/secure-log-agent/agent.yaml \
-  --config=/etc/secure-log-agent/remote.d/remote.yaml
-
-sudo chown -R otel-agent:nogroup /etc/secure-log-agent
-sudo chmod -R 750 /etc/secure-log-agent
-
-sudo cp /home/Last/Lastagent/agent.yaml /etc/secure-log-agent/agent.yaml
+sudo mkdir -p /etc/secure-log-agent
+sudo cp agent.yaml /etc/secure-log-agent/agent.yaml
 sudo chown otel-agent:nogroup /etc/secure-log-agent/agent.yaml
 sudo chmod 640 /etc/secure-log-agent/agent.yaml
-
-sudo cp /home/Last/Lastagent/etc/agent.yaml /etc/secure-log-agent/agent.yaml
-sudo chown otel-agent:nogroup /etc/secure-log-agent/agent.yaml
-sudo chmod 640 /etc/secure-log-agent/agent.yaml
-sudo -u otel-agent /usr/local/bin/otelcol-contrib \
-  --config=/etc/secure-log-agent/agent.yaml \
-  --config=/etc/secure-log-agent/remote.d/remote.yaml
-
-
-
