@@ -1,90 +1,128 @@
 # /etc/secure-log-agent/agent.yaml
-
-# OpenTelemetry Collector 기반 로그 에이전트 설정
-# 역할:
-# 1) nginx / text4shell / PoC 컨테이너 로그 파일을 tail 해서 읽는다.
-# 2) IPv4 주소를 단순 마스킹한다.
-# 3) batch + 디스크 큐로 안정적으로 전송한다.
-# 4) OTLP/HTTP 로 secure-forwarder(ingest 엔드포인트)에 전송한다.
-#    - 서버 주소/토큰은 환경변수 INGEST_ENDPOINT / INGEST_TOKEN 으로만 받는다.
+#
+# OpenTelemetry Collector 기반 로그 에이전트 설정 파일
+#
+# 전체 흐름:
+#   1) filelog receiver 가 여러 로그 파일(nginx, text4shell 등)을 tail 로 계속 읽는다.
+#   2) transform/pii_mask processor 가 로그 본문에서 IPv4 주소를 마스킹한다.
+#   3) batch + sending_queue + retry_on_failure 로 안정적으로 전송을 보장한다.
+#   4) otlphttp exporter 가 secure-forwarder(INGEST_ENDPOINT) 로 OTLP/HTTP 요청을 보낸다.
+#   5) secure-forwarder 가 다시 솔루션 서버 /ingest/logs 로 재전송한다.
 
 extensions:
+  # /healthz 같은 헬스 체크 엔드포인트를 제공 (기본 포트 13133)
   health_check: {}
+
+  # 디스크 기반 큐/오프셋 저장소 (에이전트 재시작/네트워크 장애 시에도 데이터 유실 최소화)
   file_storage:
-    # 디스크 기반 큐/오프셋 저장소
+    # 큐/오프셋 파일을 저장할 디렉터리
     directory: /var/lib/secure-log-agent/queue
+    # 디렉터리가 없으면 자동 생성
     create_directory: true
 
 receivers:
+  # filelog: 파일을 tail 하면서 로그를 수집하는 리시버
   filelog:
+    # 수집할 로그 파일 패턴 목록
     include:
+      # nginx access 로그 (있다면)
       - /var/log/nginx/access.log
-      - /var/log/text4shell/application.log     # ← 실제 text4shell 로그 경로
-      - /var/log/containers/*_poc-lab_*.log     # (있으면) poc-lab 네임스페이스 컨테이너 로그
+
+      # text4shell 애플리케이션 로그
+      # 실제 서버에서 확인한 경로: /var/log/text4shell/application.log
+      - /var/log/text4shell/application.log
+
+      # (옵션) Kubernetes 환경에서 poc-lab 네임스페이스 컨테이너 로그
+      - /var/log/containers/*_poc-lab_*.log
+
+    # start_at: end  → 에이전트가 시작될 때, 파일의 "마지막 줄부터" 읽기 시작
+    # (기존에 쌓인 옛날 로그는 무시하고, 이후 새로 들어오는 로그만 수집)
     start_at: end
-    storage: file_storage   # file_storage extensions 사용
+
+    # 위에서 정의한 file_storage extensions 를 사용해서 오프셋/큐를 디스크에 저장
+    storage: file_storage
 
 processors:
+  # 메모리 사용량 제한 (Collector 가 너무 많은 로그로 OOM 나는 것 방지)
   memory_limiter:
-    check_interval: 2s
-    limit_mib: 256
+    check_interval: 2s     # 2초마다 메모리 사용량 체크
+    limit_mib: 256         # 256MiB 이상 사용하지 않도록 제한
 
+  # batch: 일정량씩 묶어서 전송 (네트워크 효율 + 서버 부담 감소)
   batch:
-    timeout: 1s
-    send_batch_size: 1024
-    send_batch_max_size: 2048
+    timeout: 1s            # 최대 1초 동안 모아서 한 번에 전송
+    send_batch_size: 1024  # 기본 배치 크기
+    send_batch_max_size: 2048  # 최대 배치 크기
 
+  # transform/pii_mask: 개인 식별 정보(IPv4 주소)를 마스킹하는 간단한 예시
   transform/pii_mask:
-    error_mode: ignore
+    error_mode: ignore     # 변환 실패해도 전체 파이프라인이 죽지 않도록 무시
     log_statements:
       - context: log
         statements:
-          # IPv4 주소는 전부 [ip_redacted] 로 마스킹
+          # body 에 들어있는 IPv4 주소 패턴을 [ip_redacted]로 치환
+          # 정규식: 1~3자리 숫자. 3번 + 마지막 1~3자리 숫자 (IPv4 포맷)
           - replace_pattern(body, "([0-9]{1,3}\\.){3}[0-9]{1,3}", "[ip_redacted]")
 
 exporters:
+  # otlphttp: OTLP/HTTP 포맷으로 secure-forwarder(또는 직접 ingest 서버)로 전송
   otlphttp:
-    # secure-forwarder 또는 ingest 서버 주소
-    # 예시: INGEST_ENDPOINT=http://127.0.0.1:19000
+    # 실제 HTTP 주소는 환경변수 INGEST_ENDPOINT 로 주입
+    # 예: INGEST_ENDPOINT=http://127.0.0.1:19000
     endpoint: ${env:INGEST_ENDPOINT}
+
+    # logs_endpoint: 기본 path. secure-forwarder 가 /v1/logs 를 listen 중이므로 그대로 사용
     logs_endpoint: /v1/logs
 
+    # HTTP 헤더 설정
     headers:
-      # 예시: INGEST_TOKEN=dev_local_agent_token
+      # Authorization 헤더에 Bearer 토큰을 추가
+      # 값은 환경변수 INGEST_TOKEN 으로 주입 (secure-forwarder 의 LOCAL_TOKEN 과 같아야 함)
       Authorization: "Bearer ${env:INGEST_TOKEN}"
 
+    # sending_queue: 메모리/디스크 큐를 사용해서 일시적인 장애에도 로그를 쌓았다가 재전송
     sending_queue:
-      enabled: true
-      num_consumers: 4
-      queue_size: 262144
-      storage: file_storage
+      enabled: true        # 큐 기능 사용
+      num_consumers: 4     # 동시에 소비하는 워커 수
+      queue_size: 262144   # 큐에 저장할 수 있는 로그 수 (충분히 크게 잡음)
+      storage: file_storage  # 위에서 정의한 file_storage extensions 사용 (디스크 기반)
 
+    # retry_on_failure: 네트워크/서버 오류 시 재시도 설정
     retry_on_failure:
       enabled: true
-      initial_interval: 1s
-      max_interval: 30s
-      max_elapsed_time: 0s  # 무제한 retry
+      initial_interval: 1s   # 첫 재시도까지 대기 시간
+      max_interval: 30s      # 재시도 간 최대 간격
+      max_elapsed_time: 0s   # 0s 이면 "무기한" 재시도 (데이터 유실 최소화)
 
+  # debug exporter: Collector 내부에서 처리되는 로그를 stdout 으로 출력 (디버깅 용)
   debug:
-    verbosity: basic
+    verbosity: basic        # basic / detailed 등 설정 가능
 
 service:
   telemetry:
     metrics:
+      # Collector 자체 메트릭 노출은 끄기 (필요하면 address 지정해서 켤 수 있음)
       level: none
 
+  # 사용 중인 extensions 나열
   extensions:
     - health_check
     - file_storage
 
+  # 파이프라인 정의
   pipelines:
     logs:
+      # 어떤 receiver 에서 수신할지
       receivers:
         - filelog
+
+      # 어떤 processor 들을 거칠지 (위에서 정의한 순서대로 실행됨)
       processors:
         - memory_limiter
         - transform/pii_mask
         - batch
+
+      # 어떤 exporter 로 보낼지
       exporters:
-        - otlphttp
-        - debug
+        - otlphttp   # → secure-forwarder (ingest 엔드포인트)
+        - debug      # → stdout (디버깅용, 운영 환경에서는 빼도 됨)
