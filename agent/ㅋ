@@ -1,19 +1,2 @@
-ls -l /etc/secure-log-agent
-ls -l /etc/secure-log-agent/remote.d
-
-
-sudo systemctl daemon-reexec
-sudo systemctl daemon-reload
-sudo systemctl restart otel-agent.service
-sudo systemctl status otel-agent.service -n 20
-
-sudo systemctl restart otel-agent.service
-sudo systemctl status otel-agent.service -n 10
-systemctl status otel-agent.service secure-forwarder.service agent-controller.service -n 5
-
-sudo systemctl restart otel-agent.service secure-forwarder.service agent-controller.service
-sudo systemctl status otel-agent.service secure-forwarder.service agent-controller.service -n 5
-
-mv /home/last/lastagent/etc/.env /home/last/lastagent/etc/.env.bak
-cd /home/last/lastagent
-sudo bash install_lastagent.sh
+curl -v http://192.168.67.131:9000/healthz   
+curl -v http://192.168.67.131:9000/api/agent-register
