@@ -6,28 +6,27 @@ Wants=network-online.target
 [Service]
 Type=simple
 
-# otel-agent 전용 계정
-User=otel-agent
-Group=nogroup
+# 일단 동작 우선: root 계정으로 실행
+User=root
+Group=root
+# 나중에 하드닝하고 싶으면 아래 두 줄을 쓰고 위를 주석 처리:
+#User=otel-agent
+#Group=nogroup
 
 WorkingDirectory=/etc/secure-log-agent
 
-# .env 에서 INGEST_ENDPOINT / INGEST_TOKEN 등 읽어오기
 EnvironmentFile=/home/last/lastagent/etc/.env
 
-# ExecStartPre 는 root 권한으로 실행 (디렉터리/권한 보정)
 PermissionsStartOnly=true
 ExecStartPre=/usr/bin/mkdir -p /var/lib/secure-log-agent/queue /var/lib/otelcol-contrib
-ExecStartPre=/usr/bin/chown -R otel-agent:nogroup /etc/secure-log-agent /var/lib/secure-log-agent /var/lib/otelcol-contrib
+ExecStartPre=/usr/bin/chown -R root:root /etc/secure-log-agent /var/lib/secure-log-agent /var/lib/otelcol-contrib
 
-# 실제 OTEL Collector 실행
 ExecStart=/usr/local/bin/otelcol-contrib \
   --config=/etc/secure-log-agent/agent.yaml
 
 Restart=always
 RestartSec=5
 
-########## Hardening ##########
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
@@ -41,7 +40,6 @@ RestrictNamespaces=true
 LockPersonality=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
-# OTEL 이 쓸 수 있는 경로만 쓰기 허용
 ReadWritePaths=/etc/secure-log-agent
 ReadWritePaths=/var/lib/otelcol-contrib
 ReadWritePaths=/var/log
