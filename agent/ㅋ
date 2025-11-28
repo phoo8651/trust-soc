@@ -10,3 +10,6 @@ sudo systemctl status otel-agent.service -n 20
 sudo systemctl restart otel-agent.service
 sudo systemctl status otel-agent.service -n 10
 systemctl status otel-agent.service secure-forwarder.service agent-controller.service -n 5
+
+sudo systemctl restart otel-agent.service secure-forwarder.service agent-controller.service
+sudo systemctl status otel-agent.service secure-forwarder.service agent-controller.service -n 5
