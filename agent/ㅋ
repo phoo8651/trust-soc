@@ -1,4 +1,7 @@
-sudo mkdir -p /etc/secure-log-agent
-sudo cp agent.yaml /etc/secure-log-agent/agent.yaml
-sudo chown otel-agent:nogroup /etc/secure-log-agent/agent.yaml
-sudo chmod 640 /etc/secure-log-agent/agent.yaml
+sudo mkdir -p /etc/secure-log-agent/remote.d
+
+# 아주 간단한 더미 내용이라도 넣자 (주석만 있어도 YAML 입장에선 유효)
+sudo bash -c 'echo "# remote config" > /etc/secure-log-agent/remote.d/remote.yaml'
+
+sudo chown -R otel-agent:nogroup /etc/secure-log-agent
+sudo chmod 640 /etc/secure-log-agent/remote.d/remote.yaml
