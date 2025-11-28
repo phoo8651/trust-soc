@@ -1,6 +1,1 @@
-# 이것은 프로젝트의 시작점입니다.
-
-wget https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v0.99.0/otelcol-contrib_0.99.0_linux_amd64.tar.gz
-tar -xvf otelcol-contrib_0.99.0_linux_amd64.tar.gz
-sudo mv otelcol-contrib /usr/local/bin/
-sudo chmod +x /usr/local/bin/otelcol-contrib
+sudo useradd --system --no-create-home --home /etc/secure-log-agent --shell /usr/sbin/nologin otel-agent
