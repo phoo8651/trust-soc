@@ -25,11 +25,6 @@ uvicorn app.llm.advisor_api:app --reload --port 8000
 ## 2.2 LLM_MODE=local
 export LLM_MODE=local
 
-
-## 2.3 LLM_MODE=gateway
-export LLM_MODE=gateway
-
-
 ---
 
 # 3. 모델 파일 관리
@@ -51,12 +46,9 @@ server\app\llm\models\Mistral-7B-Instruct-v0.2
 server/app/llm/rag/knowledge_base/*.md
 
 
-### 문서 변경 시
-- 서버 restart 필요
-- 자동 재색인 수행
 
 ### 불필요 문서 제거
-rag.remove_document(doc_id)
+rag.remove_document(doc_id) # 실질 삭제는 되지만 운영에 노출된 API 없음
 
 
 ---
@@ -77,42 +69,27 @@ rag.remove_document(doc_id)
 
 # 6. Metrics & Logging
 
-### Gateway Log
-- tokens_used
+### Gateway Log -> modelGatway 로컬 llm 호출 로그
+- tokens_used : 입력  prompt 길이
 - duration(sec)
 
 ### Webhook Log
 - status code
 - retry count
 
----
-
-# 7. 비용/Fallback 운영 정책
-
-### Local LLM 비용 = CPU cost  
-Gateway 모드일 경우:
-
-| 조건 | 조치 |
-|------|------|
-| 모델 게이트웨이 5xx | local LLM fallback |
-| timeout | local LLM fallback |
-| 과금 초과 시 | fallback only 모드 전환 |
-
----
-
-# 8. 환경 변수 정리
+# 7. 환경 변수 정리
 
 | 변수 | 설명 |
 |------|------|
-| LLM_MODE | local / gateway |
+| LLM_MODE | local |
 | WEBHOOK_SECRET | Webhook HMAC secret |
 | PYTEST_CURRENT_TEST | pytest 모드 강제 Dummy LLM |
 
 ---
 
-# 9. 운영자 Checklist
+# 8. 운영자 Checklist
 - KB 문서 최신 유지
-- 모델 파일 무결성 체크(SHA256)
+- 운영자가 수동으로 SHA256체크 권장
 - Webhook Secret 로테이션
 - 서버 재시작 후 RAG 정상 로딩 확인
 
