@@ -1,7 +1,38 @@
-sudo cp /home/last/lastagent/etc/otel-agent.service /etc/systemd/system/otel-agent.service
-sudo systemctl daemon-reload
-sudo systemctl restart otel-agent.service
+[Unit]
+Description=Secure Log Forwarder (HMAC gate for /v1/logs)
+After=network-online.target
+Wants=network-online.target
 
-sudo cp /home/last/lastagent/forwarder/secure-forwarder.service /etc/systemd/system/secure-forwarder.service
-sudo systemctl daemon-reload
-sudo systemctl restart secure-forwarder.service
+[Service]
+Type=simple
+
+# === 실행 계정 ===
+# 내부 PoC 용도라 일단 root 로 실행해서 217/USER 문제를 확실히 없앰
+User=root
+Group=root
+# 나중에 전용 계정으로 돌리고 싶으면 위 두 줄을 주석 처리하고 아래를 풀면 됨
+#User=otel-agent
+#Group=nogroup
+
+# === 작업 디렉토리 ===
+WorkingDirectory=/home/last/lastagent/forwarder
+
+# === 환경변수 파일 ===
+# 여기서 LOCAL_TOKEN, UPSTREAM_URL, UPSTREAM_LOG_TOKEN, HMAC_SECRET 등을 읽어옴
+EnvironmentFile=/home/last/lastagent/etc/.env
+
+# === 실제 포워더 실행 ===
+ExecStart=/home/last/lastagent/venv/bin/python \
+  /home/last/lastagent/forwarder/secure-forwarder.py
+
+Restart=always
+RestartSec=5
+
+# --- 하드닝 옵션 (필요하면 유지, 문제 생기면 일단 주석처리해도 됨) ---
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
