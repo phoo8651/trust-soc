@@ -1,0 +1,280 @@
+openapi: 3.1.0
+info:
+  title: Trust-SOC Incident Advisor API
+  version: 1.0.0
+  description: |
+    LLM 기반 보안 로그 분석 및 HIL(Human-In-The-Loop) 자동화 시스템.
+
+    주요 기능:
+    - 로그/이벤트 요약 및 공격 기법 매핑(MITRE ATT&CK)
+    - RAG 기반 대응 권고 생성
+    - Confidence/HIL 정책 기반 승인 워크플로우
+    - Webhook 전송 + HMAC + Idempotency 보호
+
+servers:
+  - url: http://localhost:8000
+
+tags:
+  - name: Analysis
+  - name: Incidents
+  - name: Webhooks
+  - name: Health
+
+paths:
+  /analyze:
+    post:
+      tags: [Analysis]
+      summary: Analyze a security log and create or update an incident
+      description: |
+        입력 받은 로그/이벤트 텍스트를 분석하여 Summary, TTP 매핑, 대응 권고를 생성합니다.  
+        callback_url을 입력하면, HIL(Pending Approval) 시 자동 Webhook 호출을 시도합니다.
+      operationId: analyzeLog
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [event_text, evidences]
+              properties:
+                incident_id:
+                  type: string
+                  nullable: true
+                  description: 기존 Incident에 추가 분석하는 경우 사용 (없으면 자동 생성)
+                event_text:
+                  type: string
+                evidences:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/EvidenceRef"
+                callback_url:
+                  type: string
+                  format: uri
+                  nullable: true
+                  description: 선택적 Webhook 수신 URL (없으면 서버 기본 설정 사용)
+      responses:
+        "200":
+          description: Incident decision and summary generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IncidentOutputWithMeta"
+        "422":
+          description: Invalid input or schema mismatch
+        "500":
+          description: Internal processing error
+
+  /incidents/{incident_id}:
+    get:
+      tags: [Incidents]
+      summary: Get incident details
+      operationId: getIncident
+      parameters:
+        - name: incident_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Incident retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IncidentOutput"
+        "404":
+          description: Incident not found
+
+  /incidents/{incident_id}/approve:
+    post:
+      tags: [Incidents]
+      summary: Approve an incident (clear HIL requirement)
+      operationId: approveIncident
+      parameters:
+        - name: incident_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Incident approved
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [incident_id, status, summary, confidence]
+                properties:
+                  incident_id: { type: string }
+                  status: { type: string }
+                  summary: { type: string }
+                  confidence: { type: number, format: float }
+        "404":
+          description: Incident not found
+
+  /incidents/{incident_id}/reject:
+    post:
+      tags: [Incidents]
+      summary: Reject an incident (keep HIL requirement)
+      operationId: rejectIncident
+      parameters:
+        - name: incident_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Incident rejected
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [incident_id, status, summary, confidence]
+                properties:
+                  incident_id: { type: string }
+                  status: { type: string }
+                  summary: { type: string }
+                  confidence: { type: number, format: float }
+        "404":
+          description: Incident not found
+
+  /webhooks/hil:
+    post:
+      tags: [Webhooks]
+      summary: HIL Webhook callers must verify timestamp + HMAC + idempotency
+      description: |
+        외부 시스템이 HIL 승인 트리거를 수신/전달하는 경우 사용.  
+
+        - `X-Idempotency-Key` 헤더 필요  
+        - Body 전체에 대해 `signature` 값 검증(HMAC-SHA256)  
+        - `timestamp`는 5분 이내만 허용  
+      operationId: hilWebhook
+      parameters:
+        - name: X-Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [callback_url, timestamp, signature, incident_id]
+              properties:
+                callback_url: { type: string, format: uri }
+                timestamp: { type: number, format: float }
+                signature: { type: string, description: "HMAC-SHA256 hash hex" }
+                incident_id: { type: string }
+      responses:
+        "200":
+          description: Accepted or duplicate event
+        "401":
+          description: Signature invalid or expired
+        "422":
+          description: Missing or invalid parameters
+
+  /webhooks/test-receiver:
+    post:
+      tags: [Webhooks]
+      summary: Debugging webhook receiver (verifies X-Signature header)
+      parameters:
+        - name: X-Signature
+          in: header
+          required: true
+          schema:
+            type: string
+            description: "sha256=<HMAC_HEX>"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Payload accepted by mock receiver
+        "401":
+          description: Signature mismatch
+
+  /healthz:
+    get:
+      tags: [Health]
+      summary: API health check
+      responses:
+        "200":
+          description: Status ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+
+components:
+  schemas:
+    EvidenceRef:
+      type: object
+      required: [type, ref_id, source, offset, length, sha256]
+      properties:
+        type:
+          type: string
+          enum: ["raw", "yara", "hex", "webhook"]
+        ref_id:
+          type: string
+        source:
+          type: string
+        offset:
+          type: integer
+          minimum: 0
+        length:
+          type: integer
+          minimum: 0
+        sha256:
+          type: string
+          pattern: "^[0-9a-fA-F]{6,64}$"
+        rule_id:
+          type: string
+          nullable: true
+
+    IncidentOutput:
+      type: object
+      required: [summary, attack_mapping, recommended_actions, confidence, evidence_refs, hil_required, status]
+      properties:
+        summary: { type: string }
+        attack_mapping:
+          type: array
+          minItems: 1
+          items: { type: string }
+        recommended_actions:
+          type: array
+          minItems: 1
+          items: { type: string }
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        evidence_refs:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/EvidenceRef"
+        hil_required:
+          type: boolean
+        status:
+          type: string
+          enum: ["pending_approval", "approved", "rejected"]
+
+    IncidentOutputWithMeta:
+      allOf:
+        - $ref: "#/components/schemas/IncidentOutput"
+        - type: object
+          properties:
+            incident_id:
+              type: string
+            next_action:
+              type: string
+              enum: ["monitor", "wait_approval", "add_evidence"]
