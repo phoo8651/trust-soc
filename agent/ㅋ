@@ -31,5 +31,8 @@ sudo -u otel-agent /usr/local/bin/otelcol-contrib \
 sudo chown -R otel-agent:nogroup /etc/secure-log-agent
 sudo chmod -R 750 /etc/secure-log-agent
 
-sudo mkdir -p /var/lib/otelcol-contrib
-sudo chown -R otel-agent:nogroup /var/lib/otelcol-contrib
+sudo cp /home/Last/Lastagent/agent.yaml /etc/secure-log-agent/agent.yaml
+sudo chown otel-agent:nogroup /etc/secure-log-agent/agent.yaml
+sudo chmod 640 /etc/secure-log-agent/agent.yaml
+
+
