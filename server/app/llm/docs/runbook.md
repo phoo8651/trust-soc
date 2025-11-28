@@ -24,13 +24,9 @@
 ### 조치 절차
 1) API 로그에서 `summary_prompt` 재시도 여부 확인  
 2) Local LLM 로그에서 crash 여부 확인  
-3) fallback DummyLLM 작동 여부 체크  
+3) fallback DummyLLM 작동 
 4) 재현 요청으로 문제 prompt 확인  
-5) 필요 시 모델 재시작:
-    killall -9 llama || true
-    systemctl restart llm-advisor
- 
----
+
 
 ## 🟧 2.2 Webhook 실패 (timeout / 5xx)
 
@@ -51,9 +47,6 @@
 ### 조치
 1) KB 문서 경로 존재 확인  
 2) KB 파일 UTF-8 인코딩 확인  
-3) 서버 재시작:
-   systemctl restart llm-advisor
-    
 
 ---
 
@@ -72,7 +65,7 @@
 ### 조치
 - CPU 점유율 확인
 - 토큰 길이 초과 여부 검증
-- Local → Gateway 모드 전환 고려
+
 
 ---
 
@@ -84,7 +77,7 @@ GET /incidents/{id}
 POST /incidents/{id}/approve
 
 3) 불명확하면 반려:
-
+POST /incidents/{id}/reject
 ---
 
 # 4. Secret / Key Rotation Procedure
@@ -98,16 +91,7 @@ POST /incidents/{id}/approve
 
 ---
 
-# 5. 서버 재시작 절차 
-systemctl stop llm-advisor
-systemctl start llm-advisor
-
-또는 개발 모드에서는: uvicorn ... --reload
-
-
----
-
-# 6. 점검 Checklist
+# 5. 점검 Checklist
 - Masking 정상 동작 확인
 - Webhook signature 확인
 - RAG hit 정상 여부
@@ -115,7 +99,7 @@ systemctl start llm-advisor
 
 ---
 
-# 7. FAQ
+# 6. FAQ
 
 ### Q. LLM이 왜 계속 같은 답을 내놓나요?  
 A. temperature=0.0 설정으로 deterministic 동작함.
