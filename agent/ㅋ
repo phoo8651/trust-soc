@@ -27,3 +27,9 @@ journalctl -xeu otel-agent.service --no-pager | tail -n 30
 sudo -u otel-agent /usr/local/bin/otelcol-contrib \
   --config=/etc/secure-log-agent/agent.yaml \
   --config=/etc/secure-log-agent/remote.d/remote.yaml
+
+sudo chown -R otel-agent:nogroup /etc/secure-log-agent
+sudo chmod -R 750 /etc/secure-log-agent
+
+sudo mkdir -p /var/lib/otelcol-contrib
+sudo chown -R otel-agent:nogroup /var/lib/otelcol-contrib
