@@ -6,71 +6,42 @@ Wants=network-online.target
 [Service]
 Type=simple
 
-# 사전 준비 (운영 서버에서 1회 실행 필요):
-#   sudo useradd --system --no-create-home \
-#     --home /etc/secure-log-agent \
-#     --shell /usr/sbin/nologin \
-#     otel-agent
-#
-#   sudo mkdir -p /var/lib/otelcol-contrib
-#   sudo chown -R otel-agent:nogroup /etc/secure-log-agent /var/lib/otelcol-contrib
-#
-# 위 작업 후에만 User=otel-agent 설정이 정상 동작함.
-User=otel-agent               # 전용 계정으로 실행 (root 아님)
-Group=nogroup                 # 불필요한 그룹 권한 제거
+# otel-agent 전용 계정
+User=otel-agent
+Group=nogroup
 
 WorkingDirectory=/etc/secure-log-agent
 
-# OTEL agent.yaml 에서 ${env:INGEST_ENDPOINT}, ${env:INGEST_TOKEN} 사용 시 주입되는 값
-# Secure Forwarder(127.0.0.1:19000)를 경유하는 구조라면 예시는 아래와 같음.
-Environment="INGEST_ENDPOINT=http://127.0.0.1:19000"
-Environment="INGEST_TOKEN=replace_with_ingest_token"
+# .env 에서 INGEST_ENDPOINT / INGEST_TOKEN 등 읽어오기
+EnvironmentFile=/home/last/lastagent/etc/.env
 
+# ExecStartPre 는 root 권한으로 실행 (디렉터리/권한 보정)
+PermissionsStartOnly=true
+ExecStartPre=/usr/bin/mkdir -p /var/lib/secure-log-agent/queue /var/lib/otelcol-contrib
+ExecStartPre=/usr/bin/chown -R otel-agent:nogroup /etc/secure-log-agent /var/lib/secure-log-agent /var/lib/otelcol-contrib
+
+# 실제 OTEL Collector 실행
 ExecStart=/usr/local/bin/otelcol-contrib \
-  --config=/etc/secure-log-agent/agent.yaml \
-  --config=/etc/secure-log-agent/remote.d/remote.yaml
+  --config=/etc/secure-log-agent/agent.yaml
 
 Restart=always
 RestartSec=5
 
 ########## Hardening ##########
-
 NoNewPrivileges=true
-# 프로세스와 자식들이 setuid, setcap 등으로 "새 권한"을 얻지 못하게 막음.
-
 PrivateTmp=true
-# 다른 서비스와 /tmp 파일을 공유하지 않도록 분리.
-
 ProtectSystem=full
-# ReadWritePaths 로 허용한 경로만 쓰기 가능하게 제한.
-
 ProtectHome=true
-# 에이전트가 사용자 홈 디렉토리 건드리지 못하게 함.
-
 ProtectControlGroups=true
-# cgroup 트리 수정 금지.
-
 ProtectKernelLogs=true
-# /dev/kmsg 등 커널 로그 직접 읽기 금지.
-
 ProtectKernelModules=true
-# 커널 모듈 로드/언로드 금지.
-
 ProtectKernelTunables=true
-# /proc/sys, /sys 등 커널 튜닝 값 변경 금지.
-
 RestrictSUIDSGID=true
-# setuid/setgid 바이너리 사용 제한.
-
 RestrictNamespaces=true
-# 새 네임스페이스(unshare 등) 생성 차단.
-
 LockPersonality=true
-# 프로세스 ABI 변경(personality syscall) 금지.
-
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-# IPv4, IPv6, Unix 소켓만 허용.
 
+# OTEL 이 쓸 수 있는 경로만 쓰기 허용
 ReadWritePaths=/etc/secure-log-agent
 ReadWritePaths=/var/lib/otelcol-contrib
 ReadWritePaths=/var/log
