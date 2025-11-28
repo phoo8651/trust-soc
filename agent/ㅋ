@@ -7,3 +7,11 @@ sudo useradd --system --no-create-home \
   --home /etc/secure-log-agent \
   --shell /usr/sbin/nologin \
   otel-agent
+
+sudo mkdir -p /etc/secure-log-agent/remote.d
+sudo mkdir -p /var/lib/secure-log-agent/queue
+
+sudo chown -R otel-agent:nogroup /etc/secure-log-agent
+sudo chown -R otel-agent:nogroup /var/lib/secure-log-agent
+sudo chmod -R 750 /etc/secure-log-agent
+sudo chmod -R 750 /var/lib/secure-log-agent
