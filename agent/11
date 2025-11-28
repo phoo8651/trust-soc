@@ -1,5 +1,1 @@
-sudo cp /home/last/lastagent/forwarder/secure-forwarder.service /etc/systemd/system/secure-forwarder.service
-
-sudo systemctl daemon-reload
-sudo systemctl restart secure-forwarder.service
-sudo systemctl status secure-forwarder.service -n 20
+sudo systemctl status otel-agent.service secure-forwarder.service agent-controller.service -n 5
