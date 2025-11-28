@@ -22,7 +22,6 @@
 ## 🟧 2. Tampering (변조)
 ### 위협
 - Prompt Injection으로 LLM 출력 변조
-- RAG Poisoning: 악성 문서 삽입
 - evidence data 위조(sha256 불일치)
 
 ### 대응
@@ -75,7 +74,6 @@
 - 승인 권한을 가진 외부 시스템 가장
 
 ### 대응
-- 승인/반려는 human 사용자가 API로 호출
 - Webhook은 callback-only
 - 서명 기반 source validation
 
@@ -88,10 +86,9 @@
 → 해결: evidence는 snippet만 제공, quoted-only
 
 ## Training Data Leakage
-- local LLM만 사용 → external data leakage 없음
+- local LLM만 사용
 
-## RAG Poisoning
-→ 해결: KB 디렉토리 로컬 관리 + summarize_hits 제한
+
 
 ---
 
