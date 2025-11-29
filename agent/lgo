@@ -11,3 +11,27 @@ curl -X POST http://127.0.0.1:19000/v1/logs \
       }]
     }]
   }'
+
+def send_to_server(payload):
+    body_bytes = json.dumps(payload).encode("utf-8")
+    ts = str(int(time.time()))
+    p_hash = hashlib.sha256(body_bytes).hexdigest()
+
+    headers = {
+        "Authorization": f"Bearer {LOG_TOKEN}",
+        "Content-Type": "application/json",
+        "x-request-timestamp": ts,
+        "x-payload-hash": p_hash,
+        "x-client-id": CLIENT_ID,
+    }
+
+    try:
+        resp = requests.post(UPSTREAM_URL, data=body_bytes, headers=headers, timeout=5)
+
+        # 🔍 디버그용 로그 추가
+        log(f"Upstream status={resp.status_code}, body={resp.text}")
+
+        return resp.status_code in [200, 202]
+    except Exception as e:
+        log(f"Upstream Error: {e}")
+        return False
