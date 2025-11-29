@@ -12,3 +12,12 @@ HMAC_SECRET=super_secret_hmac_key
 LOCAL_TOKEN=dev_agent_token
 LISTEN_HOST=127.0.0.1
 LISTEN_PORT=19000
+
+curl -X POST http://127.0.0.1:19000 \
+  -H "Authorization: Bearer dev_agent_token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "timestamp": "2025-11-29T14:00:00Z",
+    "level": "INFO",
+    "message": "✅ 30080 포트 수동 테스트 로그입니다."
+  }'
