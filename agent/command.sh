@@ -3,9 +3,9 @@ set -euo pipefail
 
 #
 # lastagent 설치 스크립트
-#  - 에이전트 스택(secure-forwarder, agent-controller, otel-agent)을 한 번에 설치/등록
-#  - .env 자동 생성 (솔루션 서버에 agent register 요청)
-#  - 이미 설치된 service 유닛은 "덮어쓰지 않도록" 구성
+# - 에이전트 스택(secure-forwarder, agent-controller, otel-agent)을 한 번에 설치/등록
+# - .env 자동 생성 (솔루션 서버에 agent register 요청)
+# - 이미 설치된 service 유닛은 "덮어쓰지 않도록" 구성
 #
 
 # ────────────── 기본 환경 설정 ──────────────
@@ -24,14 +24,12 @@ BOOTSTRAP_SECRET="dev"
 AGENT_VERSION="0.1.0"
 CLIENT_ID="default"
 
-# 🔹 포트 설정: register용은 30080 / controller용은 8000
+# ✅ 서버 NodePort = 30080, register API는 /agent-register
 CONTROLLER_HOST="192.168.67.131"
-CONTROLLER_PORT="8000"           # agent-controller 통신용
-REGISTER_API_PORT="30080"        # agent-register 전용 (k8s NodePort)
-
+CONTROLLER_PORT="30080"
 CONTROLLER_URL="http://${CONTROLLER_HOST}:${CONTROLLER_PORT}"
-REGISTER_PATH="/api/agent-register"
-REGISTER_URL="http://${CONTROLLER_HOST}:${REGISTER_API_PORT}${REGISTER_PATH}"
+REGISTER_PATH="/agent-register"
+REGISTER_URL="${CONTROLLER_URL}${REGISTER_PATH}"
 
 # ────────────── Helper 함수 ──────────────
 
