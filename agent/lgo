@@ -1,5 +1,6 @@
 mkdir -p /home/last/lastagent/debug
 cd /home/last/lastagent/debug
+
 nano test_register.py
 
 #!/usr/bin/env python3
@@ -16,7 +17,6 @@ AGENT_VERSION = "1"  # 서버가 string 기대
 
 def main():
     # host: 서버 쪽 요구사항에 맞게 IP 또는 hostname
-    # 우선 IP 먼저 시도, 없으면 hostname
     try:
         host_ip = socket.gethostbyname(socket.gethostname())
     except Exception:
@@ -36,7 +36,7 @@ def main():
     print("[*] body:", resp.text)
 
     if resp.status_code not in (200, 201):
-        print("[!] /auth/register 실패 → 서버 응답을 서버 담당자에게 그대로 보여줘서 스펙 확인 필요")
+        print("[!] /auth/register 실패")
         return
 
     try:
@@ -59,64 +59,4 @@ if __name__ == "__main__":
     main()
 
 cd /home/last/lastagent/debug
-nano test_ingest.py
-
-#!/usr/bin/env python3
-import json
-import time
-import hashlib
-import requests
-
-CONTROLLER_HOST = "192.168.67.131"
-NODEPORT = 30080
-INGEST_URL = f"http://{CONTROLLER_HOST}:{NODEPORT}/ingest/logs"
-
-# 이 값은 test_register.py 결과에서 access_token 을 복사해서 넣기
-UPSTREAM_LOG_TOKEN = "여기에_register_응답의_access_token_붙여넣기"
-
-CLIENT_ID = "default"
-
-def main():
-    # 서버가 요구하는 payload 형태에 최대한 맞춰보기
-    payload = {
-        "meta": {
-            "client_id": CLIENT_ID,
-            "host": "agent-test-host",
-        },
-        "agent_id": "agent-test-id",
-        "records": [
-            {
-                "ts": "2025-11-30T12:00:00Z",
-                "source_type": "manual-test",
-                "raw_line": "테스트 로그 한 줄입니다.",
-                "tags": ["manual", "test"],
-            }
-        ],
-    }
-
-    body_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-    ts = str(int(time.time()))
-    payload_hash = hashlib.sha256(body_bytes).hexdigest()
-    nonce = str(int(time.time() * 1000))
-    idem_key = hashlib.md5((ts + nonce).encode()).hexdigest()
-
-    headers = {
-        "Authorization": f"Bearer {UPSTREAM_LOG_TOKEN}",
-        "Content-Type": "application/json",
-        "X-Client-Id": CLIENT_ID,
-        "X-Request-Timestamp": ts,
-        "X-Payload-Hash": f"sha256:{payload_hash}",
-        "X-Nonce": nonce,
-        "X-Idempotency-Key": idem_key,
-    }
-
-    print("[*] POST", INGEST_URL)
-    print("[*] headers:", headers)
-    print("[*] body   :", body_bytes.decode())
-
-    resp = requests.post(INGEST_URL, data=body_bytes, headers=headers)
-    print("[*] status:", resp.status_code)
-    print("[*] body  :", resp.text)
-
-if __name__ == "__main__":
-    main()
+python3 test_register.py
