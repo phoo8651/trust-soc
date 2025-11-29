@@ -1,0 +1,13 @@
+curl -X POST http://192.168.67.131:30080/v1/logs \
+  -H "Authorization: Bearer acc_de706746-c326-42fa-be79-1da4dfd0055e" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source": "agent-test",
+    "logs": [
+      {
+        "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
+        "level": "INFO",
+        "message": "Test log from agent manually triggered"
+      }
+    ]
+  }'
