@@ -1,7 +1,8 @@
-curl -X POST http://192.168.67.131:30080/api/agent-register \
+curl -X POST http://127.0.0.1:19000/v1/logs \
+  -H "Authorization: Bearer dev_agent_token" \
   -H "Content-Type: application/json" \
   -d '{
-    "client_id": "default",
-    "host": "192.168.82.143",
-    "agent_version": 1
+    "timestamp": "2025-11-29T14:00:00Z",
+    "level": "INFO",
+    "message": "✅ 30080 포트 수동 테스트 로그입니다."
   }'
