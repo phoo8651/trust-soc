@@ -31,7 +31,7 @@ CLIENT_ID="default"
 
 # ※ 여기 IP/PORT를 솔루션 서버에 맞게 조정
 CONTROLLER_HOST="192.168.67.131"
-CONTROLLER_PORT="9000"              # NodePort(또는 포트포워딩) 기준 포트
+CONTROLLER_PORT="30080"              # NodePort(또는 포트포워딩) 기준 포트
 CONTROLLER_URL="http://${CONTROLLER_HOST}:${CONTROLLER_PORT}"
 REGISTER_PATH="/api/agent-register" # 백엔드에서 사용하는 실제 경로
 REGISTER_URL="${CONTROLLER_URL}${REGISTER_PATH}"
