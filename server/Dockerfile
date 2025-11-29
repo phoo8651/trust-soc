@@ -12,18 +12,16 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# 통합 소스 복사 (solution_server/ 안에 backend, detect, llm, requirements.txt 있다고 가정)
-COPY app/ .
-
 # 2. 의존성 설치
-COPY app/requirements.txt .
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 3. 소스 코드 및 스크립트 복사
 COPY . .
 
-# 4. start-all.sh 실행 권한 부여
-RUN chmod +x start-all.sh
+# 4. 권한 부여 및 디렉토리 생성
+RUN chmod +x start-all.sh && \
+    mkdir -p /app/models /app/data
 
 # 5. 환경 설정 (기본값)
 ENV PYTHONPATH=/app

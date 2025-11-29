@@ -13,9 +13,8 @@ fi
 : "${DATABASE_URL:=postgresql://user:password@localhost:5432/socdb}"
 : "${LLM_MODE:=local}"
 : "${LOCAL_MODEL:=/app/models/mistral-7b-instruct-v0.2.Q4_K_M.gguf}"
-: "${PYTHONPATH:=/app}"
 
-export DATABASE_URL LLM_MODE LOCAL_MODEL PYTHONPATH
+export DATABASE_URL LLM_MODE LOCAL_MODEL PYTHONPATH=$PYTHONPATH:$(pwd)
 
 # 3. 디렉토리 권한 및 존재 여부 체크 (선택 사항)
 mkdir -p /app/models /app/data
