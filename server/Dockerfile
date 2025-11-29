@@ -9,14 +9,14 @@ RUN apt-get update && apt-get install -y \
     g++ \
     libpq-dev \
     libyara-dev \
-    curl
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # 통합 소스 복사 (solution_server/ 안에 backend, detect, llm, requirements.txt 있다고 가정)
 COPY app/ .
 
 # 2. 의존성 설치
-COPY requirements.txt .
+COPY app/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 3. 소스 코드 및 스크립트 복사
