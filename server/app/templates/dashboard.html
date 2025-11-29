@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row mb-4">
+  <div class="col-md-3">
+    <div class="card card-stat shadow-sm">
+      <div class="card-body">
+        <h6 class="text-muted">Connected Agents</h6>
+        <h2>{{ stats.agents }}</h2>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card card-stat shadow-sm" style="border-left-color: #198754;">
+      <div class="card-body">
+        <h6 class="text-muted">Total Logs</h6>
+        <h2>{{ stats.logs }}</h2>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card card-stat shadow-sm" style="border-left-color: #ffc107;">
+      <div class="card-body">
+        <h6 class="text-muted">Total Incidents</h6>
+        <h2>{{ stats.incidents }}</h2>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card card-alert shadow-sm">
+      <div class="card-body">
+        <h6 class="text-muted">Pending Approval (HIL)</h6>
+        <h2 class="text-danger">{{ stats.pending }}</h2>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="col-md-8">
+    <div class="card shadow-sm mb-4">
+      <div class="card-header bg-white">
+        <h5 class="mb-0">🚨 Recent Incidents</h5>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Summary</th>
+              <th>Severity</th>
+              <th>Status</th>
+              <th>Conf.</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for inc in incidents %}
+            <tr>
+              <td>{{ inc.created_at.strftime('%H:%M:%S') }}</td>
+              <td title="{{ inc.summary }}">{{ inc.summary[:50] }}...</td>
+              <td>
+                <span class="badge {% if inc.confidence > 80 %}bg-danger{% else %}bg-warning{% endif %}">
+                  {{ "High" if inc.confidence > 80 else "Medium" }}
+                </span>
+              </td>
+              <td>
+                {% if inc.status == 'pending_approval' %}
+                <span class="badge bg-info text-dark">Pending</span>
+                {% elif inc.status == 'approved' %}
+                <span class="badge bg-success">Approved</span>
+                {% else %}
+                <span class="badge bg-secondary">{{ inc.status }}</span>
+                {% endif %}
+              </td>
+              <td>{{ inc.confidence }}%</td>
+            </tr>
+            {% else %}
+            <tr>
+              <td colspan="5" class="text-center">No recent incidents.</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-4">
+    <div class="card shadow-sm">
+      <div class="card-header bg-white">
+        <h5 class="mb-0">⚡ Recent Jobs</h5>
+      </div>
+      <ul class="list-group list-group-flush">
+        {% for job in jobs %}
+        <li class="list-group-item d-flex justify-content-between align-items-center">
+          <div>
+            <small class="text-muted">{{ job.created_at.strftime('%H:%M:%S') }}</small><br>
+            <strong>{{ job.job_type }}</strong>
+          </div>

@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2>Incident History</h2>
+    <button class="btn btn-outline-primary" onclick="location.reload()">Refresh</button>
+</div>
+
+<div class="card shadow-sm">
+    <div class="table-responsive">
+        <table class="table table-striped mb-0 align-middle">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Time</th>
+                    <th>Client</th>
+                    <th>Summary</th>
+                    <th>Rec. Actions</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for inc in incidents %}
+                <tr>
+                    <td><small class="text-muted">{{ inc.incident_id.split('-')[-1] }}</small></td>
+                    <td>{{ inc.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                    <td>{{ inc.client_id }}</td>
+                    <td>{{ inc.summary }}</td>
+                    <td>
+                        {% if inc.recommended_actions %}
+                        {% for act in inc.recommended_actions %}
+                        <span class="badge bg-light text-dark border">{{ act.action if act.action else act }}</span>
+                        {% endfor %}
+                        {% else %}
+                        <span class="text-muted">-</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if inc.status == 'pending_approval' %}
+                        <span class="badge bg-info text-dark">Pending</span>
+                        {% elif inc.status == 'approved' %}
+                        <span class="badge bg-success">Approved</span>
+                        {% else %}
+                        <span class="badge bg-secondary">{{ inc.status }}</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

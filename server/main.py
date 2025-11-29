@@ -31,6 +31,7 @@ from app.api import ingest, auth, llm_router  # llm_router 추가
 from app.controllers.detect_controller import DetectController
 from app.controllers.llm_controller import LLMController
 from app.services.advisor_service import AdvisorService
+from app.api import console
 
 
 # 3. 미들웨어
@@ -79,6 +80,7 @@ app.add_middleware(TenantContextMiddleware)
 app.include_router(auth.router)
 app.include_router(ingest.router)
 app.include_router(llm_router.router, prefix="/llm")  # /llm/analyze
+app.include_router(console.router, prefix="/console")
 
 
 @app.get("/health")
