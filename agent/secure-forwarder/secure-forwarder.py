@@ -87,38 +87,41 @@ def transform_otlp(otlp_data):
 
 # 3. 서버 전송 로직
 def send_to_server(payload):
-    body_bytes = json.dumps(payload).encode("utf-8")
+    # 1) 공백 없이 직렬화된 JSON -> bytes
+    body_bytes = json.dumps(
+        payload,
+        separators=(",", ":"),   # 공백 제거
+        ensure_ascii=False       # 한글 그대로 UTF-8
+    ).encode("utf-8")
 
-    # 1) 서버 verify_timestamp 가 기대하는 형식: 유닉스 타임(초) 문자열
-    ts = str(int(time.time()))
+    # 2) 타임스탬프 / nonce
+    ts = str(int(time.time()))          # 서버가 기대하는 유닉스 타임(초)
+    nonce = str(int(time.time() * 1000))  # 아무 유니크한 문자열이면 됨 (ms 단위 시간 사용)
 
-    # 2) payload 해시 (그냥 sha256 hex 값)
-    p_hash = hashlib.sha256(body_bytes).hexdigest()
+    # 3) payload 해시
+    payload_hash = hashlib.sha256(body_bytes).hexdigest()
 
-    # 3) 헤더 이름/값을 IngestController 쪽에 맞춰서 세팅
+    # 4) 서버 스펙에 맞는 헤더들
     headers = {
         "Authorization": f"Bearer {LOG_TOKEN}",
         "Content-Type": "application/json",
-
-        # IngestController: headers.get("x-request-timestamp")
-        "x-request-timestamp": ts,
-
-        # IngestController: headers.get("x-payload-hash")
-        # → "sha256:..." 말고 그냥 hex 값만
-        "x-payload-hash": p_hash,
-
-        # 아래 것들은 서버에서 안 써도 상관 없음 (있어도 무방)
-        "x-client-id": CLIENT_ID,
-        # "x-idempotency-key": hashlib.md5((ts + p_hash).encode()).hexdigest(),
+        "X-Client-Id": CLIENT_ID,
+        "X-Request-Timestamp": ts,
+        "X-Payload-Hash": f"sha256:{payload_hash}",
+        "X-Nonce": nonce,
+        "X-Idempotency-Key": hashlib.md5((ts + nonce).encode()).hexdigest(),
     }
 
     try:
         resp = requests.post(UPSTREAM_URL, data=body_bytes, headers=headers, timeout=5)
-        return resp.status_code in [200, 202]
+
+        # 디버그용 로그(422 떴을 때 서버 메시지 확인용)
+        log(f"Upstream status={resp.status_code}, body={resp.text}")
+
+        return resp.status_code in (200, 202)
     except Exception as e:
         log(f"Upstream Error: {e}")
         return False
-
 
 # 4. HTTP 요청 핸들러
 class RequestHandler(BaseHTTPRequestHandler):
