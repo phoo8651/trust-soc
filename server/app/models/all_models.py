@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, Integer, Text, Boolean, TIMESTAMP, ForeignKey, func, BigInteger, Identity, UniqueConstraint
+from sqlalchemy import Column, String, Integer, Text, Boolean, TIMESTAMP, func, BigInteger, Identity, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from app.core.database import Base
 
@@ -9,10 +9,10 @@ class Agent(Base):
     client_id = Column(String, nullable=False)
     host = Column(String, nullable=False)
     agent_version = Column(String)
-    access_token = Column(Text, nullable=False)
-    refresh_token = Column(Text, nullable=False)
-    access_expires = Column(TIMESTAMP(timezone=True), nullable=False)
     registered_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    refresh_token = Column(Text, nullable=False)
+    access_token = Column(Text, nullable=False)
+    access_expires = Column(TIMESTAMP(timezone=True), nullable=False)
 
 class IdempotencyKey(Base):
     __tablename__ = "idempotency_keys"
@@ -20,42 +20,53 @@ class IdempotencyKey(Base):
     client_id = Column(String, nullable=False)
     agent_id = Column(String, nullable=False)
     idem_key = Column(String, nullable=False)
-    nonce = Column(String)
-    ts_bucket = Column(String)
+    nonce = Column(String, nullable=False)
+    ts_bucket = Column(String, nullable=False)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
-    __table_args__ = (UniqueConstraint("client_id", "agent_id", "idem_key", name="uq_idem_key"),)
+    __table_args__ = (
+        UniqueConstraint("client_id", "agent_id", "idem_key", name="uq_idem_key"),
+    )
 
 class RawLog(Base):
     __tablename__ = "raw_logs"
-    # Postgres 파티셔닝을 위해 ts를 PK에 포함하거나 Identity 사용 주의 (여기선 심플하게 처리)
-    id = Column(BigInteger, Identity(always=False), primary_key=True)
+    # Postgres Partitioning을 고려하여 Identity 사용
+    id = Column("id", BigInteger, Identity(always=False), primary_key=True)
     ts = Column(TIMESTAMP(timezone=True), nullable=False)
     client_id = Column(String, nullable=False)
-    host = Column(String)
-    agent_id = Column(String)
-    source_type = Column(String)
-    raw_line = Column(Text)
+    host = Column(String, nullable=False)
+    agent_id = Column(String, nullable=False)
+    source_type = Column(String, nullable=False)
+    raw_line = Column(Text, nullable=False)
     hash_sha256 = Column(String)
-    # inserted_at = Column(TIMESTAMP(timezone=True), server_default=func.now()) # 파티션 키 이슈로 일단 생략 가능
+    tags = Column(JSONB)
+    inserted_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 class Event(Base):
     __tablename__ = "events"
-    id = Column(BigInteger, Identity(always=False), primary_key=True)
-    ts = Column(TIMESTAMP(timezone=True))
-    client_id = Column(String)
+    id = Column("id", BigInteger, Identity(always=False), primary_key=True)
+    ts = Column(TIMESTAMP(timezone=True), nullable=False)
+    client_id = Column(String, nullable=False)
+    host = Column(String, nullable=False)
+    category = Column(String)
     severity = Column(String)
     summary = Column(Text)
+    evidence_refs = Column(JSONB, nullable=False, default=list)
+    rule_id = Column(String)
     context = Column(JSONB)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 class Incident(Base):
     __tablename__ = "incidents"
     incident_id = Column(String, primary_key=True, default=lambda: f"inc-{uuid.uuid4()}")
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
-    client_id = Column(String)
+    client_id = Column(String, nullable=False)
+    category = Column(String)
     summary = Column(Text)
-    status = Column(String)
+    attack_mapping = Column(JSONB)
     recommended_actions = Column(JSONB)
-    confidence = Column(Integer) # or Float
+    confidence = Column(Integer)
+    status = Column(String)
+    incident_metadata = Column(JSONB)
 
 class Job(Base):
     __tablename__ = "jobs"
@@ -65,14 +76,28 @@ class Job(Base):
     job_type = Column(String, nullable=False)
     args = Column(JSONB)
     status = Column(String, default="pending")
-    signature = Column(Text)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    signature = Column(Text)
+    
+class Policy(Base):
+    __tablename__ = "policies"
+    policy_id = Column(Integer, primary_key=True, autoincrement=True)
+    scope = Column(String, nullable=False)        
+    client_id = Column(String)
+    host = Column(String)
+    config = Column(JSONB, nullable=False)
+    etag = Column(String)
+    signature = Column(Text)
+    updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
+    __table_args__ = (
+        UniqueConstraint("scope", "client_id", "host", name="uq_policy_scope"),
+    )
 
 class AuditLog(Base):
     __tablename__ = "audit_logs"
     audit_id = Column(Integer, primary_key=True, autoincrement=True)
-    actor = Column(String)
-    subject = Column(String)
-    action = Column(String)
+    actor = Column(String, nullable=False)
+    subject = Column(String, nullable=False)
+    action = Column(String, nullable=False)
     context = Column(JSONB)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
