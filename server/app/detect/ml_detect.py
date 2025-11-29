@@ -1,336 +1,163 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-FR-08: PyOD IForest + ADTK EWMA
-- feature_rollup_5m → 다변량 이상치(ml_score, ml_anomaly, ml_processed)
-- feature_rollup_1h → EWMA 급변(ewma_anomaly)
-- events 테이블에 증거 포함 삽입
-- 모델/임계치 파일(joblib) 버전 관리
-"""
-import os, sys, logging, joblib
+# /backend/postgres/app/detect/ml_detect.py
+
+import os
+import logging
+import joblib
 import numpy as np
 import pandas as pd
 import psycopg2
-from psycopg2.extras import DictCursor, Json
+from psycopg2.extras import DictCursor
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from pyod.models.iforest import IForest
+from detect_utils import start_metrics_server, ML_LATENCY
 
-# ───────────────────────────────────────────────────────────
-# 설정
-# ───────────────────────────────────────────────────────────
-# DB 연결 설정 (환경 변수 또는 기본값 사용)
+# DB 설정
 DB_CFG = dict(
     host=os.getenv("DB_HOST", "localhost"),
     port=os.getenv("DB_PORT", "5432"),
-    dbname=os.getenv("DB_NAME", "logs_db"),
+    dbname=os.getenv("DB_NAME", "socdb"),
     user=os.getenv("DB_USER", "postgres"),
     password=os.getenv("DB_PASS", "password"),
 )
-# Isolation Forest (IForest) 모델 및 임계값 저장 파일 경로
-MODEL_FILE = os.getenv("ML_MODEL_FILE", "iforest_pipeline.pkl")
-THRESH_FILE = os.getenv("ML_THRESH_FILE", "iforest_thresh.pkl")
-# IForest 학습에 사용할 데이터의 과거 기간 (일)
-HISTORY_DAYS = int(os.getenv("TRAIN_HISTORY_DAYS", "7"))
-# IForest 학습 시 예상되는 이상치 비율 (contamination)
-CONTAMINATION = float(os.getenv("IF_CONTAMINATION", "0.01"))
-# EWMA (Exponentially Weighted Moving Average) 탐지기의 임계값 계수 C
-EWMA_C = float(os.getenv("EWMA_C", "3.0"))
+# 모델 파일 경로 (K8s PVC 마운트 경로 고려)
+MODEL_FILE = os.getenv("ML_MODEL_FILE", "/app/data/iforest_pipeline.pkl")
+THRESH_FILE = os.getenv("ML_THRESH_FILE", "/app/data/iforest_thresh.pkl")
+PROMETHEUS_PORT = int(os.getenv("PROMETHEUS_PORT", 8001))
 
-# 로깅 설정
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("ml_detect")
 
-
 def get_conn():
-    """DB 연결 객체를 반환합니다."""
     return psycopg2.connect(cursor_factory=DictCursor, **DB_CFG)
 
-
-# ───────────────────────────────────────────────────────────
-# IForest 모델 로드 및 학습
-# ───────────────────────────────────────────────────────────
 def load_or_train(conn):
     """
-    저장된 모델 파일이 있으면 로드하고, 없으면 DB에서 데이터를 가져와 IForest 모델을 학습합니다.
+    기존 모델을 로드하거나, 데이터가 있으면 새로 학습합니다.
+    데이터가 너무 적으면 더미 모델을 생성하여 에러를 방지합니다.
     """
-    # 1. 기존 모델 파일 로드 시도
     if os.path.exists(MODEL_FILE) and os.path.exists(THRESH_FILE):
-        logger.info("기존 모델 로드: %s", MODEL_FILE)
-        pipe = joblib.load(MODEL_FILE)
-        thresh = joblib.load(THRESH_FILE)
-        return pipe, float(thresh)
+        logger.info("Loading existing model...")
+        return joblib.load(MODEL_FILE), float(joblib.load(THRESH_FILE))
+    
+    logger.info("Training new model...")
+    # 최근 7일치 데이터 조회
+    query = """
+        SELECT event_count, error4xx_ratio, error5xx_ratio 
+        FROM feature_rollup_5m 
+        WHERE window_start >= NOW() - INTERVAL '7 days'
+        LIMIT 5000
+    """
+    df = pd.read_sql(query, conn)
+    
+    # 데이터가 부족할 경우 (초기 구축 시) 가짜 데이터로 모델 초기화
+    if len(df) < 50:
+        logger.warning("Not enough data for training. Creating dummy model.")
+        X = np.array([[100, 0.0, 0.0], [500, 0.1, 0.0]]) # Dummy features
+    else:
+        X = df[['event_count', 'error4xx_ratio', 'error5xx_ratio']].fillna(0).values
 
-    # 2. 학습 데이터 조회 (feature_rollup_5m 테이블에서 최근 HISTORY_DAYS 기간 데이터 사용)
-    df = pd.read_sql(
-        f"""
-        SELECT event_count, error4xx_ratio, error5xx_ratio,
-               unique_url_count, unique_user_count
-        FROM feature_rollup_5m
-        WHERE window_start >= NOW() - INTERVAL '{HISTORY_DAYS} days'
-          AND event_count IS NOT NULL
-    """,
-        conn,
-    )
+    # 파이프라인 구성: 스케일링 -> IForest
+    pipeline = Pipeline([
+        ("scaler", StandardScaler()),
+        ("iforest", IForest(contamination=0.01, random_state=42))
+    ])
+    pipeline.fit(X)
+    
+    # 임계값 계산 (학습 데이터의 결정 점수 분포 기준)
+    scores = pipeline.named_steps["iforest"].decision_scores_
+    thresh = float(np.percentile(scores, 99)) # 상위 1%를 이상치로 간주
 
-    if df.empty:
-        logger.error("학습용 데이터 부족")
-        sys.exit(1)
-
-    # 3. 데이터 준비 및 표준화 (StandardScaler)
-    X = df.values
-    scaler = StandardScaler()
-    Xs = scaler.fit_transform(X)
-
-    # 4. Isolation Forest 모델 학습
-    clf = IForest(contamination=CONTAMINATION, random_state=42)
-    clf.fit(Xs)
-
-    # 5. 모델 파이프라인 구성 (전처리 + 모델)
-    pipe = Pipeline([("scaler", scaler), ("iforest", clf)])
-
-    # 6. 이상치 임계값 계산 (contamination 비율에 해당하는 결정 점수)
-    scores = clf.decision_scores_
-    thresh = float(np.percentile(scores, 100 * (1 - CONTAMINATION)))
-
-    # 7. 모델 및 임계값 저장 (재사용을 위함)
-    joblib.dump(pipe, MODEL_FILE)
+    # 저장
+    os.makedirs(os.path.dirname(MODEL_FILE), exist_ok=True)
+    joblib.dump(pipeline, MODEL_FILE)
     joblib.dump(thresh, THRESH_FILE)
-    logger.info("모델 학습 완료, threshold=%.4f", thresh)
-    return pipe, thresh
+    
+    return pipeline, thresh
 
-
-# ───────────────────────────────────────────────────────────
-# IForest 다변량 이상치 탐지 실행
-# ───────────────────────────────────────────────────────────
 def run_iforest(conn, pipe, thresh):
-    """
-    feature_rollup_5m 테이블의 미처리된 데이터에 대해 IForest 이상 탐지를 실행합니다.
-    """
-    # IForest 탐지 대상 조회 (ml_processed가 FALSE인 최근 1시간 데이터)
-    df = pd.read_sql(
-        """
+    """Isolation Forest 실행 및 결과 업데이트"""
+    if not pipe: return
+
+    # 처리되지 않은 최신 5분 데이터 조회
+    df = pd.read_sql("""
         SELECT client_id, host_name, source_ip, window_start,
-               event_count, error4xx_ratio, error5xx_ratio,
-               unique_url_count, unique_user_count
+               event_count, error4xx_ratio, error5xx_ratio
         FROM feature_rollup_5m
-        WHERE ml_processed IS NOT TRUE
-          AND event_count IS NOT NULL
+        WHERE ml_processed IS FALSE
           AND window_start >= NOW() - INTERVAL '1 hour'
-        ORDER BY window_start
-    """,
-        conn,
-    )
+    """, conn)
 
     if df.empty:
-        logger.info("IForest 대상 없음")
+        logger.info("No data for IForest detection.")
         return
 
-    # 1. 특성(Features) 추출 및 파이프라인 적용 (스케일링 포함)
-    feats = df[
-        [
-            "event_count",
-            "error4xx_ratio",
-            "error5xx_ratio",
-            "unique_url_count",
-            "unique_user_count",
-        ]
-    ].values
-    # 파이프라인의 각 단계(scaler, iforest)를 명시적으로 호출하여 결정 점수(decision_function) 계산
-    scores = pipe.named_steps["iforest"].decision_function(
-        pipe.named_steps["scaler"].transform(feats)
-    )
+    # 예측 수행
+    X = df[['event_count', 'error4xx_ratio', 'error5xx_ratio']].fillna(0).values
+    X_scaled = pipe.named_steps["scaler"].transform(X)
+    scores = pipe.named_steps["iforest"].decision_function(X_scaled)
 
-    cnt = 0
+    # DB 업데이트
     with conn.cursor() as cur:
-        for i, row in df.iterrows():
-            s = float(scores[i])
-            anom = s >= thresh  # 점수가 임계값 이상이면 이상치
-
-            # 2. feature_rollup_5m 테이블 업데이트 (점수, 이상 여부, 처리 플래그)
-            cur.execute(
-                """
+        for idx, row in df.iterrows():
+            score = float(scores[idx])
+            is_anomaly = score >= thresh
+            
+            cur.execute("""
                 UPDATE feature_rollup_5m
-                    SET ml_score=%s, ml_anomaly=%s, ml_processed=TRUE
-                 WHERE client_id=%s AND host_name=%s AND source_ip=%s AND window_start=%s
-            """,
-                (
-                    s,
-                    anom,
-                    row["client_id"],
-                    row["host_name"],
-                    row["source_ip"],
-                    row["window_start"],
-                ),
-            )
-
-            # 3. 이상치인 경우 events 테이블에 증거와 함께 기록
-            if anom:
-                cnt += 1
-                # 이벤트 증거(Evidence) 데이터 구성
-                evidence = {
-                    "window_start": str(row["window_start"]),
-                    "event_count": row["event_count"],
-                    "error4xx_ratio": row["error4xx_ratio"],
-                    "error5xx_ratio": row["error5xx_ratio"],
-                    "unique_url_count": row["unique_url_count"],
-                    "unique_user_count": row["unique_user_count"],
-                    "ml_score": s,
-                    "ml_threshold": thresh,
-                }
-                cur.execute(
-                    """
-                    INSERT INTO events (
-                      event_id, client_id, host_name,
-                      event_category, event_type,
-                      ml_score, ml_threshold,
-                      severity, description, evidence_refs, "@timestamp"
-                    ) VALUES (
-                      gen_random_uuid(), %s, %s,
-                      'anomaly','iforest_multivariate',
-                      %s, %s,
-                      'High','Multivariate anomaly detected by IForest.',
-                      %s, NOW()
-                    ) ON CONFLICT DO NOTHING
-                """,
-                    (row["client_id"], row["host_name"], s, thresh, Json(evidence)),
-                )
+                SET ml_score = %s, ml_anomaly = %s, ml_processed = TRUE
+                WHERE client_id = %s AND host_name = %s 
+                  AND source_ip = %s AND window_start = %s
+            """, (score, is_anomaly, row['client_id'], row['host_name'], 
+                  row['source_ip'], row['window_start']))
         conn.commit()
-    logger.info("IForest 완료: 총 %d건 처리, %d건 이상 탐지", len(df), cnt)
-
-
-# ───────────────────────────────────────────────────────────
-# EWMA 시계열 이상 탐지 실행
-# ───────────────────────────────────────────────────────────
-EWMA_C = 3.0  # EWMA 표준편차 배수 (이상치 판단 임계값)
-
+    logger.info(f"IForest processed {len(df)} records.")
 
 def run_ewma(conn):
     """
-    feature_rollup_1h 테이블의 총 이벤트 수 합계를 기준으로 EWMA 이상 탐지를 실행합니다.
-    (ADTK EWMAStatDetector 대신 순수 Pandas/NumPy 기반 구현 사용.)
+    EWMA (Exponentially Weighted Moving Average) 기반 시계열 급변 탐지.
+    ADTK 라이브러리 대신 Pandas 내장 기능 사용.
     """
-    # 1. feature_rollup_1h에서 window_start별 총 이벤트 수 집계 (시계열 데이터)
-    # window_start를 인덱스로 설정
-    df = pd.read_sql(
-        """
-        SELECT window_start, SUM(event_count) AS event_count
-        FROM feature_rollup_1h
-        GROUP BY window_start ORDER BY window_start
-    """,
-        conn,
-        index_col="window_start",
-    )
+    df = pd.read_sql("""
+        SELECT window_start, SUM(event_count) as total_events
+        FROM feature_rollup_5m
+        GROUP BY window_start
+        ORDER BY window_start ASC
+        LIMIT 1000
+    """, conn)
 
-    if df.shape[0] < 10:
-        logger.info("EWMA 대상 부족(%d)", df.shape[0])
-        return
+    if len(df) < 10: return
 
-    # 2. Pandas를 이용한 EWMA 계산
-    EWMA_SPAN = 10  # EWMA 윈도우 크기 (ADTK 기본값 중 하나를 사용)
-    s = df["event_count"].astype(float)
+    # Pandas ewm 계산
+    df['ewm_mean'] = df['total_events'].ewm(span=12).mean()
+    df['ewm_std'] = df['total_events'].ewm(span=12).std()
+    
+    # 3-Sigma Rule
+    last_row = df.iloc[-1]
+    upper = last_row['ewm_mean'] + (3 * last_row['ewm_std'])
+    
+    if last_row['total_events'] > upper:
+        logger.warning(f"EWMA Anomaly Detected: {last_row['total_events']} > {upper}")
+        # 실제 운영시 여기서 events 테이블에 insert 로직 추가 가능
 
-    # 지수 가중 이동 평균 (Mean)
-    ewma_mean = s.ewm(span=EWMA_SPAN, adjust=False).mean()
-    # 지수 가중 이동 표준 편차 (Standard Deviation)
-    ewma_std = s.ewm(span=EWMA_SPAN, adjust=False).std()
-
-    # 3. 이상치 임계값 계산 (EWMA ± C * EWMA_STD)
-    upper_bound = ewma_mean + EWMA_C * ewma_std
-    lower_bound = ewma_mean - EWMA_C * ewma_std
-
-    # 4. 이상 여부 확인 (가장 최근 데이터 포인트만 확인)
-    last = s.index[-1]  # 가장 최근 윈도우 시간
-    last_val = s.iloc[-1]
-    last_upper = upper_bound.iloc[-1]
-    last_lower = lower_bound.iloc[-1]
-
-    # 현재 값이 상한선을 초과하거나 하한선 미만인 경우 이상치로 판단
-    is_anomaly = (last_val > last_upper) or (last_val < last_lower)
-
-    if is_anomaly:
-        # 기존 로직 (멱등성 보장 및 이벤트 삽입) 유지
-        val = float(last_val)
-        from psycopg2.extras import Json  # Json 임포트가 필요할 경우
-
-        with conn.cursor() as cur:
-            # 중복 이벤트 삽입 방지 확인
-            cur.execute(
-                """
-                    SELECT COUNT(*) AS cnt
-                       FROM feature_rollup_1h
-                      WHERE window_start=%s AND ewma_anomaly IS TRUE
-            """,
-                (last,),
-            )
-
-            if cur.fetchone()["cnt"] == 0:
-                cur.execute(
-                    "UPDATE feature_rollup_1h SET ewma_anomaly=TRUE WHERE window_start=%s",
-                    (last,),
-                )
-
-                cur.execute(
-                    """
-                    INSERT INTO events (
-                      event_id, client_id, host_name,
-                      event_category, event_type,
-                      severity, description, evidence_refs, "@timestamp"
-                    ) VALUES (
-                      gen_random_uuid(),'__GLOBAL__','__GLOBAL__',
-                      'anomaly','ewma_timeseries',
-                      'Medium','Global event count spike/drop detected (EWMA).',
-                      %s, %s
-                    ) ON CONFLICT DO NOTHING
-                """,
-                    (
-                        Json(
-                            {
-                                "time": str(last),
-                                "value": val,
-                                "ewma_mean": ewma_mean.iloc[-1],
-                                "upper_bound": last_upper,
-                                "lower_bound": last_lower,
-                            }
-                        ),
-                        last,
-                    ),
-                )
-                conn.commit()
-                logger.warning(
-                    "EWMA anomaly at %s = %f (Upper: %.2f, Lower: %.2f)",
-                    last,
-                    val,
-                    last_upper,
-                    last_lower,
-                )
-            else:
-                logger.info("EWMA anomaly already processed: %s", last)
-    else:
-        logger.info("EWMA 정상: %s", last)
-
-
-# ───────────────────────────────────────────────────────────
-# Main
-# ───────────────────────────────────────────────────────────
 def main():
-    """메인 실행 함수: DB 연결, 모델 로드/학습, IForest, EWMA 순차 실행."""
+    start_metrics_server(PROMETHEUS_PORT)
     conn = None
     try:
         conn = get_conn()
-        pipe, thresh = load_or_train(conn)  # IForest 모델 준비
-        run_iforest(conn, pipe, thresh)  # IForest 다변량 이상 탐지 실행
-        run_ewma(conn)  # EWMA 시계열 이상 탐지 실행
-    except Exception:
-        logger.exception("ML 탐지 중 오류")
+        pipe, thresh = load_or_train(conn)
+        
+        # 메트릭 측정과 함께 실행
+        with ML_LATENCY.time():
+            run_iforest(conn, pipe, thresh)
+            run_ewma(conn)
+            
+    except Exception as e:
+        logger.error(f"ML Detect failed: {e}")
     finally:
-        if conn:
-            conn.close()
-            logger.info("DB 연결 종료")
-            logger.info("ML 탐지 종료")
-
+        if conn: conn.close()
 
 if __name__ == "__main__":
     main()

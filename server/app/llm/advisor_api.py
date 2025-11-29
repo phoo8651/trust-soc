@@ -1,4 +1,4 @@
-#llm/advisor_api.py
+# llm/advisor_api.py
 """
 Incident Advisor API
 - LLM 기반 보안 이벤트 분석
@@ -94,6 +94,7 @@ else:
     )
 
 logger.info(f"✅ LLM Engine Loaded: {model_gateway.__class__.__name__}")
+
 
 # ============================================================
 #  RAG: Knowledge Base 문서 자동 로딩
@@ -202,8 +203,7 @@ def validate_evidence_refs(evidences: list):
 
         if not re.fullmatch(r"[0-9a-fA-F]{6,64}", e["sha256"]):
             raise HTTPException(422, detail="sha256 must be hex format")
-        
-        
+
 
 # ============================================================
 #  Prompt 생성
@@ -275,7 +275,9 @@ def build_prompt(name: str, event_text: str, evidences: list, rag_hits: list):
             rag_block=rag_block,
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Prompt formatting failed: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Prompt formatting failed: {str(e)}"
+        )
 
 
 # ============================================================
@@ -307,27 +309,35 @@ def safe_json_extract(raw: str) -> dict:
         logger.warning(f"[safe_json_extract] Using fallback due to: {e}")
         return {}
 
-    
+
 def clean_text(text: str) -> str:
     if not text:
         return ""
     # Remove leading markdown or quote list
-    text = re.sub(r'^[-*\•\"]+\s*', '', text.strip())
+    text = re.sub(r"^[-*\•\"]+\s*", "", text.strip())
     # Remove everything after another JSON braces
-    text = re.sub(r'\{.*$', '', text, flags=re.DOTALL)
+    text = re.sub(r"\{.*$", "", text, flags=re.DOTALL)
     return text.strip()
 
+
 ACTION_KEYWORDS = [
-    "investigate", "block", "disable", "mfa",
-    "change password", "change ssh", "reset ssh",
-    "reset password", "update credentials",
-    "secure access", "harden"
+    "investigate",
+    "block",
+    "disable",
+    "mfa",
+    "change password",
+    "change ssh",
+    "reset ssh",
+    "reset password",
+    "update credentials",
+    "secure access",
+    "harden",
 ]
+
 
 def normalize_summary(summary: str, event_masked: str) -> str:
     cleaned = clean_text(summary)
     lower = cleaned.lower()
-
 
     action_patterns = [
         r"(change|reset).*(password|key)",
@@ -337,23 +347,21 @@ def normalize_summary(summary: str, event_masked: str) -> str:
         r"investigate",
         r"review",
         r"check",
-        r"monitor"
+        r"monitor",
     ]
-    
+
     # LLM이 조치 문장으로 판단될 경우 → summary 취소
     if any(k in lower for k in ACTION_KEYWORDS):
         cleaned = ""
     cleaned = cleaned.strip("\"' ")
     cleaned = cleaned.rstrip(".")
-    
+
     # summary가 없거나 "모른다"거나 "unknown"이면
     if not cleaned or lower in ("unknown", "모른다"):
         cleaned = event_masked[:80] + "..."
 
     # 첫 글자 대문자 처리
     return cleaned[0].upper() + cleaned[1:] if cleaned else "Unknown event"
-
-
 
 
 # ============================================================
@@ -383,7 +391,7 @@ async def send_webhook_request(url: str, body: bytes, signature: str):
             except Exception as e:
                 logger.warning(f"[Webhook attempt {attempt+1}] failed: {e}")
 
-            await asyncio.sleep(0.2 * (2 ** attempt))  # 0.2 → 0.4 → 0.8
+            await asyncio.sleep(0.2 * (2**attempt))  # 0.2 → 0.4 → 0.8
 
     return False
 
@@ -403,15 +411,15 @@ async def analyze_log(payload: dict):
         incident_id = payload.get("incident_id", str(uuid.uuid4()))
         event_text = payload["event_text"]
         evidences = payload.get("evidences", [])
-        
+
         if not evidences:
-           raise HTTPException(
-               422,
-               detail={
-                   "error_code": "EVIDENCE_REQUIRED",
-                   "message": "At least one evidence must be provided"
-               }
-            )       
+            raise HTTPException(
+                422,
+                detail={
+                    "error_code": "EVIDENCE_REQUIRED",
+                    "message": "At least one evidence must be provided",
+                },
+            )
 
         # ---------------------------
         # 1. 마스킹 처리
@@ -425,14 +433,13 @@ async def analyze_log(payload: dict):
             # evidence.data 기반 snippet 자동 추출
             data = e.get("data")
             if not snippet and isinstance(data, str):
-               snippet = data[:120]
+                snippet = data[:120]
 
             # fallback: event_text 일부라도 넣기
             if not snippet:
-               snippet = event_masked[:50]
+                snippet = event_masked[:50]
             else:
                 snippet = snippet[:50]
-            
 
             masked_evidences.append({**e, "snippet": str(snippet)})
 
@@ -445,7 +452,7 @@ async def analyze_log(payload: dict):
         # Evidence validation
         # ---------------------------
         validate_evidence_refs(masked_evidences)
-        
+
         # 2-1. YARA/HEX evidence → RAG 인덱싱 (텍스트 기반 요약만 저장)
         for e in masked_evidences:
             if e.get("type") in ("yara", "hex"):
@@ -496,10 +503,12 @@ async def analyze_log(payload: dict):
         # ---------------------------
         # 4. LLM Summary
         # ---------------------------
-        summary_prompt = build_prompt("summary", event_masked, masked_evidences, rag_hits)
+        summary_prompt = build_prompt(
+            "summary", event_masked, masked_evidences, rag_hits
+        )
         raw_summary_response = await model_gateway.generate(summary_prompt)
         summary_json = safe_json_extract(raw_summary_response)
-        
+
         # Missing fields 보정 (LLM JSON 일부만 생성 시)
         summary_json.setdefault("summary", event_masked[:80] + "...")
         summary_json.setdefault("attack_mapping", attack_mapping)
@@ -508,60 +517,63 @@ async def analyze_log(payload: dict):
         summary_json.setdefault("evidence_refs", masked_evidences)
         summary_json.setdefault("hil_required", False)
 
-        
-
-
         # JSON 파싱 실패 시 필수 스키마 최소값 자동 보정
         if not summary_json or not isinstance(summary_json, dict):
-            logger.warning("[Summary] LLM returned invalid JSON. Applying fallback default.")
+            logger.warning(
+                "[Summary] LLM returned invalid JSON. Applying fallback default."
+            )
             summary_json = {
                 "summary": event_masked[:80] + "...",
                 "attack_mapping": attack_mapping,  # 기존 매퍼 값 반영
                 "recommended_actions": ["추가 로그 수집 필요"],
                 "confidence": 0.5,
                 "evidence_refs": masked_evidences,
-                "hil_required": True
+                "hil_required": True,
             }
 
         if not validate_schema(summary_json):
-           # 1회 재시도
-           logger.warning("[SCHEMA] Summary schema mismatch → retry once")
-           raw_retry = await model_gateway.generate(summary_prompt)
-           summary_json = safe_json_extract(raw_retry)
+            # 1회 재시도
+            logger.warning("[SCHEMA] Summary schema mismatch → retry once")
+            raw_retry = await model_gateway.generate(summary_prompt)
+            summary_json = safe_json_extract(raw_retry)
 
-           if not validate_schema(summary_json):
-               raise HTTPException(
-                   status_code=422,
-                   detail={
-                       "error_code": "SCHEMA_VALIDATION_FAILED",
-                       "message": "LLM summary schema mismatch twice"
-                   }
-               )
-        
+            if not validate_schema(summary_json):
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error_code": "SCHEMA_VALIDATION_FAILED",
+                        "message": "LLM summary schema mismatch twice",
+                    },
+                )
+
         raw_summary = summary_json.get("summary", "")
         summary = normalize_summary(raw_summary, event_masked)
         logger.info(f"[Summary] raw={raw_summary!r} → normalized={summary!r}")
-    
 
-    
         # 🚨 summary에 Action 문구가 남아있을 경우 강제 복구
         lower_summary = summary.lower()
         if any(keyword in lower_summary for keyword in ACTION_KEYWORDS):
-            logger.warning("[Guardrail] Summary still contains action → fallback to event_masked")
+            logger.warning(
+                "[Guardrail] Summary still contains action → fallback to event_masked"
+            )
             summary = event_masked[:80] + "..."
 
         # 🚫 JSON 문법 잔여 따옴표 제거
         summary = summary.strip().strip("\"'")
 
-
-
         # ---------------------------
         # 5. Recommended Actions
         # ---------------------------
-        actions_prompt = build_prompt("response_guide", event_masked, masked_evidences, rag_hits)
-        actions_prompt = actions_prompt.replace("${attack_mapping_json}", json.dumps(attack_mapping))
-        actions_json = safe_json_extract(await model_gateway.generate(actions_prompt)) or {}
-        
+        actions_prompt = build_prompt(
+            "response_guide", event_masked, masked_evidences, rag_hits
+        )
+        actions_prompt = actions_prompt.replace(
+            "${attack_mapping_json}", json.dumps(attack_mapping)
+        )
+        actions_json = (
+            safe_json_extract(await model_gateway.generate(actions_prompt)) or {}
+        )
+
         actions = []
 
         rec_list = actions_json.get("recommended_actions")
@@ -569,18 +581,17 @@ async def analyze_log(payload: dict):
             for item in rec_list:
                 if isinstance(item, str):
                     actions.append(item.strip())
-       
-                    
+
         if not actions:
             actions = ["추가 로그 수집 및 관리자 검토 필요"]
-        
+
         if not isinstance(actions, list):
             raise HTTPException(
                 status_code=422,
                 detail={
                     "error_code": "SCHEMA_VALIDATION_FAILED",
-                    "message": "recommended_actions must be a list"
-                }
+                    "message": "recommended_actions must be a list",
+                },
             )
 
         # ======================================================
@@ -590,11 +601,7 @@ async def analyze_log(payload: dict):
         llm_conf = float(summary_json.get("confidence", 0.5))
         rag_conf = max((h.get("final_score", 0) for h in rag_hits), default=0) * 0.8
 
-        confidence = round(
-            rule_conf * 0.7 +
-            llm_conf * 0.2 +
-            rag_conf * 0.1,
-        2)
+        confidence = round(rule_conf * 0.7 + llm_conf * 0.2 + rag_conf * 0.1, 2)
 
         # Brute force 확정 시 Confidence 추가 보정
         if attack_mapping == ["T1110.001"]:
@@ -616,9 +623,6 @@ async def analyze_log(payload: dict):
             status = "rejected"
             next_action = "add_evidence"
 
-
-
-
         # Guardrail: FTP는 무조건 HIL
         if "ftp" in event_masked.lower():
             confidence = min(confidence, 0.5)
@@ -638,12 +642,12 @@ async def analyze_log(payload: dict):
             evidence_refs=[EvidenceRef(**e) for e in masked_evidences],
             status=status,
         )
-        
+
         # ======================================================
         # (선택) HIL 자동 Webhook 호출 – callback_url 이 들어왔을 때만
         # ======================================================
         callback_url = "http://localhost:10555/webhooks/test-receiver"
-        
+
         if hil_required and callback_url:
             try:
                 body = {
@@ -655,12 +659,12 @@ async def analyze_log(payload: dict):
                 }
                 body_bytes = json.dumps(body).encode()
                 signature = hmac.new(
-                    WEBHOOK_SECRET.encode(),
-                    body_bytes,
-                    hashlib.sha256
+                    WEBHOOK_SECRET.encode(), body_bytes, hashlib.sha256
                 ).hexdigest()
                 # 외부 수신기는 /webhooks/test-receiver 처럼 X-Signature 헤더 검증
-                asyncio.create_task(send_webhook_request(callback_url, body_bytes, signature))
+                asyncio.create_task(
+                    send_webhook_request(callback_url, body_bytes, signature)
+                )
             except Exception as _:
                 # Webhook 실패해도 본 API 응답은 그대로 진행
                 pass
@@ -671,7 +675,6 @@ async def analyze_log(payload: dict):
             next_action = "wait_approval"
         else:
             next_action = "monitor"
-
 
         return {
             "incident_id": incident_id,
@@ -690,8 +693,6 @@ async def analyze_log(payload: dict):
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(500, str(e))
-    
-    
 
 
 # ============================================================
@@ -728,9 +729,7 @@ async def send_hil_webhook(payload: dict, idempotency_key: str = Header(None)):
 
     # Payload 전체에 대한 서명 검증
     expected_sig = hmac.new(
-        WEBHOOK_SECRET.encode(),
-        json.dumps(payload).encode(),
-        hashlib.sha256
+        WEBHOOK_SECRET.encode(), json.dumps(payload).encode(), hashlib.sha256
     ).hexdigest()
 
     if not hmac.compare_digest(signature_header, expected_sig):
@@ -742,6 +741,7 @@ async def send_hil_webhook(payload: dict, idempotency_key: str = Header(None)):
 
     return {"status": "accepted", "incident_id": incident_id}
 
+
 @app.post("/webhooks/test-receiver")
 async def webhook_receiver(payload: dict, x_signature: str = Header(None)):
     """
@@ -752,9 +752,7 @@ async def webhook_receiver(payload: dict, x_signature: str = Header(None)):
         raise HTTPException(401, "Missing X-Signature")
 
     expected = hmac.new(
-        WEBHOOK_SECRET.encode(),
-        json.dumps(payload).encode(),
-        hashlib.sha256
+        WEBHOOK_SECRET.encode(), json.dumps(payload).encode(), hashlib.sha256
     ).hexdigest()
 
     if not hmac.compare_digest(x_signature.replace("sha256=", ""), expected):
@@ -762,6 +760,7 @@ async def webhook_receiver(payload: dict, x_signature: str = Header(None)):
 
     logger.info(f"[Webhook Receiver] OK payload={payload}")
     return {"status": "ack", "received": payload}
+
 
 # ============================================================
 #  Incident 조회 API
@@ -834,7 +833,7 @@ async def reject_incident(incident_id: str):
         "confidence": incident.confidence,
     }
 
+
 @app.get("/healthz")
 async def health_check():
     return {"status": "ok"}
-

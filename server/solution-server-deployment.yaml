@@ -15,53 +15,67 @@ spec:
       labels:
         app: solution-server
     spec:
+      # [Volume 설정]
       volumes:
+        # 1. DB 데이터 저장소 (PoC용 임시 저장소, 재기동시 초기화됨)
+        # 영구 저장이 필요하면 hostPath나 PVC로 변경하세요.
         - name: pg-data
-          emptyDir: {} # PoC면 emptyDir로 충분, 재기동 시 데이터 초기화
+          emptyDir: {}
 
-        # LLM 모델 디렉터리 (노드 ↔ 컨테이너 매핑)
+        # 2. LLM 모델 파일 (호스트의 실제 경로를 마운트)
+        # 주의: 호스트(Node)의 해당 경로에 .gguf 모델 파일이 있어야 합니다.
         - name: llm-models
           hostPath:
-            path: /app/llm/models # 노드(호스트)에 모델이 있는 실제 경로
+            path: /app/llm/models # <-- 실제 모델이 있는 호스트 경로로 수정하세요
             type: DirectoryOrCreate
 
       containers:
-        # 1) PostgreSQL 컨테이너
+        # -------------------------------------------------
+        # [Container 1] PostgreSQL Database (Sidecar)
+        # -------------------------------------------------
         - name: postgres
           image: postgres:15
           ports:
             - containerPort: 5432
           env:
             - name: POSTGRES_DB
-              value: "logs_db"
+              value: "socdb"
             - name: POSTGRES_USER
-              value: "postgres"
+              value: "soc_user"
             - name: POSTGRES_PASSWORD
-              value: "1q2w3e4r!"
+              value: "soc_password"
           volumeMounts:
             - name: pg-data
               mountPath: /var/lib/postgresql/data
           resources:
             requests:
-              cpu: "100m"
+              cpu: "200m"
               memory: "256Mi"
             limits:
-              cpu: "500m"
-              memory: "512Mi"
+              cpu: "1"
+              memory: "1Gi"
 
-        # 2) 솔루션 서버(backend + llm + detect 통합 이미지)
+        # -------------------------------------------------
+        # [Container 2] Integrated SOC Server
+        # -------------------------------------------------
         - name: solution-all
-          image: solution-all:latest # 본인이 빌드한 이미지명으로 교체
+          image: solution-all:latest # 빌드한 이미지 이름
           imagePullPolicy: IfNotPresent
+
+          # start-all.sh 실행 (환경변수 적용 및 서버 구동)
+          command: ["./start-all.sh"]
+
           ports:
-            - containerPort: 8000 # backend API
-            - containerPort: 9000 # LLM API
+            - containerPort: 8000
+            - containerPort: 8001
+
+          # [환경 변수 사전 정의] - 여기서 값을 수정하면 서버에 반영됩니다.
           env:
-            # --- 백엔드용 SQLAlchemy URL ---
+            # 1. Database 연결 정보 (Sidecar DB 사용 시 localhost)
             - name: DATABASE_URL
               value: "postgresql+psycopg2://postgres:1q2w3e4r!@127.0.0.1:5432/logs_db"
 
-            # --- Detect 4개 모듈용 psycopg2 접속 정보 ---
+            # 2. Detect 모듈용 DB 설정 (psycopg2 직접 연결용)
             - name: DB_HOST
               value: "127.0.0.1"
             - name: DB_PORT
@@ -73,23 +87,44 @@ spec:
             - name: DB_PASS
               value: "1q2w3e4r!"
 
-            # --- LLM 동작 모드 ---
-            - name: LLM_MODE
-              value: "local"
+            # 3. 보안 키 (운영 환경에서는 복잡한 값으로 변경 필수)
+            - name: POLICY_SIGNING_SECRET
+              value: "sample_secret"
+            - name: JOB_SIGNING_SECRET
+              value: "sample_secret"
+            - name: WEBHOOK_SECRET
+              value: "change_this_to_webhook_secret"
+            # IP 암호화용 32byte Hex Key (예시: 0000...0000)
+            - name: AES_GCM_KEY_HEX
+              value: "0000000000000000000000000000000000000000000000000000000000000000"
 
-            # --- 로컬 모델 절대 경로 (파일명은 실제 존재하는 이름으로) ---
+            # 4. LLM 설정
+            - name: LLM_MODE
+              value: "local" # 'local' 또는 'gateway'
+            # 컨테이너 내부 마운트 경로 (변경 불필요, 파일명만 확인)
             - name: LOCAL_MODEL
-              value: "/app/llm/models/mistral-7b-instruct-v0.2.Q4_K_M.gguf"
+              value: "/app/models/mistral-7b-instruct-v0.2.Q4_K_M.gguf"
+
+            # 5. 기타 설정
+            - name: PROMETHEUS_PORT
+              value: "8001"
+            - name: ENV_STATE
+              value: "prod"
+            - name: ACCESS_TOKEN_TTL_SECONDS
+              value: "3600"
+            - name: LOG_LEVEL
+              value: "INFO"
 
           volumeMounts:
+            # 호스트의 모델 디렉토리를 컨테이너의 /app/models로 마운트
             - name: llm-models
-              mountPath: /app/llm/models
+              mountPath: /app/models
               readOnly: true
 
           resources:
             requests:
               cpu: "1"
-              memory: "1Gi"
+              memory: "2Gi"
             limits:
-              cpu: "2" # vCPU 2개까지
-              memory: "6Gi"
+              cpu: "4"
+              memory: "8Gi"

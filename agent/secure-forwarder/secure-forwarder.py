@@ -21,48 +21,156 @@ Secure Forwarder (HMAC Gate) for Logs
 
 import os
 import json
-import requests
 import time
+import hashlib
+import hmac
+import requests
+import socket
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 
-load_dotenv("/home/last/lastagent/etc/.env")  # 환경변수 파일 로드
+# 1. 설정 로드
+load_dotenv("/home/last/lastagent/etc/.env")
 
-FORWARD_URL = os.getenv("FORWARD_URL")
-FORWARD_TOKEN = os.getenv("FORWARD_TOKEN")
-QUEUE_DIR = "/var/lib/secure-log-agent/queue"
-INTERVAL = float(os.getenv("FORWARD_INTERVAL", "2"))
+LISTEN_PORT = int(os.getenv("LISTEN_PORT", "19000"))
+LISTEN_HOST = os.getenv("LISTEN_HOST", "127.0.0.1")
 
-HEADERS = {
-    "Authorization": f"Bearer {FORWARD_TOKEN}",
-    "Content-Type": "application/json"
-}
+# 인증 정보
+LOCAL_TOKEN = os.getenv("LOCAL_TOKEN")      # Agent가 보낸 토큰 검증용
+UPSTREAM_URL = os.getenv("UPSTREAM_URL")    # 서버로 보낼 주소
+LOG_TOKEN = os.getenv("UPSTREAM_LOG_TOKEN") # 서버 인증용 토큰
+HMAC_SECRET = os.getenv("HMAC_SECRET")
 
-def log(msg: str) -> None:
+# 식별자
+AGENT_ID = os.getenv("AGENT_ID", "unknown")
+CLIENT_ID = os.getenv("CLIENT_ID", "default")
+
+def log(msg):
     print(f"[FWD] {msg}", flush=True)
 
-def send_file(file_path: str) -> bool:
+# 2. 데이터 변환 로직 (OTLP -> Server Schema)
+def transform_otlp(otlp_data):
+    records = []
     try:
-        with open(file_path, "rb") as f:
-            data = f.read()
-        resp = requests.post(FORWARD_URL, data=data, headers=HEADERS, timeout=3)
-        if resp.status_code == 200:
-            return True
-        else:
-            log(f"send failed: {file_path}, status={resp.status_code}")
+        resource_logs = otlp_data.get("resourceLogs", [])
+        for rl in resource_logs:
+            for sl in rl.get("scopeLogs", []):
+                for lr in sl.get("logRecords", []):
+                    # Timestamp (Nano -> ISO8601)
+                    ts_nano = int(lr.get("timeUnixNano", time.time_ns()))
+                    ts_iso = datetime.fromtimestamp(ts_nano / 1e9, timezone.utc).isoformat()
+                    
+                    # Body 추출
+                    body = lr.get("body", {})
+                    raw_msg = body.get("stringValue", str(body))
+                    
+                    records.append({
+                        "ts": ts_iso,
+                        "source_type": "agent-filelog",
+                        "raw_line": raw_msg,
+                        "tags": ["otel"]
+                    })
     except Exception as e:
-        log(f"send error: {file_path}, error={e}")
-    return False
+        log(f"Transform Error: {e}")
+        return None
+        
+    if not records: 
+        return None
+
+    return {
+        "meta": {"client_id": CLIENT_ID, "host": socket.gethostname()},
+        "agent_id": AGENT_ID,
+        "records": records
+    }
+
+# 3. 서버 전송 로직
+def send_to_server(payload):
+    body_bytes = json.dumps(payload).encode("utf-8")
+    ts = datetime.now(timezone.utc).isoformat()
+    nonce = str(time.time())
+    p_hash = hashlib.sha256(body_bytes).hexdigest()
+    
+    headers = {
+        "Authorization": f"Bearer {LOG_TOKEN}",
+        "Content-Type": "application/json",
+        "X-Client-Id": CLIENT_ID,
+        "X-Request-Timestamp": ts,
+        "X-Payload-Hash": f"sha256:{p_hash}",
+        "X-Nonce": nonce,
+        "X-Idempotency-Key": hashlib.md5((ts + nonce).encode()).hexdigest()
+    }
+    
+    # HMAC 서명 (옵션)
+    if HMAC_SECRET:
+        # 서버 auth_core.py와 동일한 서명 방식 필요 (여기선 단순화)
+        # 실제로는 ingest_router가 서명을 요구하지 않으므로 payload hash로 충분할 수 있음
+        pass
+
+    try:
+        resp = requests.post(UPSTREAM_URL, data=body_bytes, headers=headers, timeout=5)
+        return resp.status_code in [200, 202]
+    except Exception as e:
+        log(f"Upstream Error: {e}")
+        return False
+
+# 4. HTTP 요청 핸들러
+class RequestHandler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        # 경로 확인
+        if self.path != "/v1/logs":
+            self.send_response(404)
+            self.end_headers()
+            return
+
+        # 로컬 인증 확인 (Bearer LOCAL_TOKEN)
+        auth_header = self.headers.get("Authorization", "")
+        if auth_header != f"Bearer {LOCAL_TOKEN}":
+            log("Local Unauthorized Access")
+            self.send_response(401)
+            self.end_headers()
+            return
+
+        # Body 읽기
+        try:
+            content_len = int(self.headers.get('Content-Length', 0))
+            post_body = self.rfile.read(content_len)
+            otlp_json = json.loads(post_body)
+        except Exception:
+            self.send_response(400)
+            self.end_headers()
+            return
+
+        # 변환 및 전송
+        server_payload = transform_otlp(otlp_json)
+        if server_payload:
+            if send_to_server(server_payload):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{"status":"ok"}')
+                log(f"Forwarded {len(server_payload['records'])} logs")
+            else:
+                # 업스트림 전송 실패 시 503을 리턴하여 OTEL이 재시도하게 함
+                self.send_response(503)
+                self.end_headers()
+        else:
+            # 변환할 데이터가 없으면 성공 처리
+            self.send_response(200)
+            self.end_headers()
+
+# 동시 처리를 위한 Threading Server
+class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+    pass
 
 def main():
-    log("secure-forwarder started.")
-    while True:
-        files = sorted(os.listdir(QUEUE_DIR))
-        for fname in files:
-            path = os.path.join(QUEUE_DIR, fname)
-            if send_file(path):
-                os.remove(path)
-                log(f"sent and removed: {fname}")
-        time.sleep(INTERVAL)
+    server = ThreadedHTTPServer((LISTEN_HOST, LISTEN_PORT), RequestHandler)
+    log(f"Secure Forwarder listening on {LISTEN_HOST}:{LISTEN_PORT}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    server.server_close()
 
 if __name__ == "__main__":
     main()

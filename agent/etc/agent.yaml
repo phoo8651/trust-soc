@@ -2,48 +2,29 @@
 # - Text4Shell / nginx 로그 파일을 tail 해서 읽고
 # - IPv4 주소를 마스킹한 뒤
 # - secure-forwarder(INGEST_ENDPOINT)로 OTLP/HTTP 전송
+# /etc/secure-log-agent/agent.yaml
 
 extensions:
-  # /healthz 같은 헬스 체크 엔드포인트 제공
   health_check: {}
-
-  # 디스크 기반 큐/오프셋 저장소
   file_storage:
-    directory: /var/lib/secure-log-agent/queue
-    # 주의: otelcol 0.99 버전은 create_directory 옵션을 지원하지 않아서
-    # 여기선 쓰지 않고, 디렉토리 생성은 설치 스크립트 / systemd 에서 처리함.
+    # [수정] Forwarder가 읽는 경로와 겹치지 않도록 변경
+    directory: /var/lib/secure-log-agent/otel_storage 
 
 receivers:
   filelog:
     include:
-      # nginx access 로그 (있다면)
       - /var/log/nginx/access.log
-
-      # Text4Shell 애플리케이션 로그
       - /var/log/text4shell/application.log
-
-      # (옵션) poc-lab 네임스페이스 컨테이너 로그
-      - /var/log/containers/*_poc-lab_*.log
-
-    # 에이전트 시작 이후의 신규 로그만 수집
     start_at: end
-
-    # file_storage extension 사용
     storage: file_storage
 
 processors:
-  # Collector 메모리 사용 제한
   memory_limiter:
     check_interval: 2s
     limit_mib: 256
-
-  # 로그를 묶어서 전송
   batch:
     timeout: 1s
     send_batch_size: 1024
-    send_batch_max_size: 2048
-
-  # IPv4 주소 마스킹
   transform/pii_mask:
     error_mode: ignore
     log_statements:
@@ -52,49 +33,31 @@ processors:
           - replace_pattern(body, "([0-9]{1,3}\\.){3}[0-9]{1,3}", "[ip_redacted]")
 
 exporters:
-  # secure-forwarder 로 전송
   otlphttp:
-    # .env 에서 INGEST_ENDPOINT 를 읽어온다 (예: http://127.0.0.1:19000)
-    endpoint: ${env:INGEST_ENDPOINT}
+    # Secure Forwarder가 리슨할 주소
+    endpoint: ${env:INGEST_ENDPOINT} 
     logs_endpoint: /v1/logs
-
     headers:
-      # .env 의 INGEST_TOKEN 이 Authorization 헤더에 들어감
       Authorization: "Bearer ${env:INGEST_TOKEN}"
-
     sending_queue:
       enabled: true
       num_consumers: 4
       queue_size: 262144
       storage: file_storage
-
     retry_on_failure:
       enabled: true
       initial_interval: 1s
-      max_interval: 30s
-      max_elapsed_time: 0s  # 0이면 무기한 재시도
 
-  # 디버깅용: Collector 로그로도 출력
   debug:
     verbosity: basic
 
 service:
   telemetry:
     metrics:
-      level: none  # 필요하면 metrics address 지정해서 사용
-
-  extensions:
-    - health_check
-    - file_storage
-
+      level: none
+  extensions: [health_check, file_storage]
   pipelines:
     logs:
-      receivers:
-        - filelog
-      processors:
-        - memory_limiter
-        - transform/pii_mask
-        - batch
-      exporters:
-        - otlphttp
-        - debug
+      receivers: [filelog]
+      processors: [memory_limiter, transform/pii_mask, batch]
+      exporters: [otlphttp, debug]

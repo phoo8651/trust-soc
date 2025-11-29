@@ -3,13 +3,20 @@ kind: Service
 metadata:
   name: solution-server
   namespace: solution-server
+  labels:
+    app: solution-server
 spec:
+  type: NodePort # 외부 접근을 위해 NodePort 사용 (LoadBalancer로 변경 가능)
   selector:
     app: solution-server
   ports:
-    - name: backend
+    # Backend API & LLM Advisor
+    - name: api
       port: 8000
       targetPort: 8000
-    - name: llm
-      port: 9000
-      targetPort: 9000
+      nodePort: 30080
+    # Prometheus Metrics
+    - name: metrics
+      port: 8001
+      targetPort: 8001
+      nodePort: 30081

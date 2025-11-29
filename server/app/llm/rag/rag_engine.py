@@ -12,11 +12,12 @@ from collections import defaultdict
 import math
 import re
 
-from llm.rag.chunker import chunk_text_by_chars, chunk_logs_by_lines
-from llm.rag.vector_adapter import VectorAdapter
-from llm.embeddings import Embedder
+from app.llm.rag.chunker import chunk_text_by_chars, chunk_logs_by_lines
+from app.llm.rag.vector_adapter import VectorAdapter
+from app.llm.embeddings import Embedder
 
-_SENTENCE_SPLIT_RE = re.compile(r'(?<=\.|!|\?|\n)\s+')
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=\.|!|\?|\n)\s+")
+
 
 class RAGEngine:
     """
@@ -50,11 +51,13 @@ class RAGEngine:
 
         for ch in chunks:
             self.docs.append(ch)
-            self.metadata.append({
-                "doc_id": doc_id,
-                "ts": ts,
-                "text": ch,
-            })
+            self.metadata.append(
+                {
+                    "doc_id": doc_id,
+                    "ts": ts,
+                    "text": ch,
+                }
+            )
 
         # VectorAdapter 재생성(단순 구현)
         self.adapter = VectorAdapter(self.docs, model_name=self.model_name)
@@ -77,14 +80,16 @@ class RAGEngine:
             recency_bonus = recency_weight * (1.0 / (age / 3600 + 1))
             final_score = score + recency_bonus
 
-            scored.append({
-                "rank": rank,
-                "score": score,
-                "final_score": final_score,
-                "doc_id": meta["doc_id"],
-                "text": meta["text"],
-                "ts": meta["ts"],
-            })
+            scored.append(
+                {
+                    "rank": rank,
+                    "score": score,
+                    "final_score": final_score,
+                    "doc_id": meta["doc_id"],
+                    "text": meta["text"],
+                    "ts": meta["ts"],
+                }
+            )
 
         scored.sort(key=lambda x: x["final_score"], reverse=True)
         return scored[:top_k]
@@ -96,7 +101,11 @@ class RAGEngine:
         """
         간단한 문장 분할. 너무 짧은 문장 제거.
         """
-        sents = [s.strip() for s in _SENTENCE_SPLIT_RE.split(text) if s and len(s.strip()) > 10]
+        sents = [
+            s.strip()
+            for s in _SENTENCE_SPLIT_RE.split(text)
+            if s and len(s.strip()) > 10
+        ]
         return sents if sents else [text.strip()]
 
     def _score_sentence_by_query(self, sentence: str, query_tokens: List[str]) -> float:
@@ -112,7 +121,9 @@ class RAGEngine:
         length_penalty = 1.0 / (1 + abs(len(stoks) - 12) / 12)
         return overlap * length_penalty
 
-    def summarize_text(self, text: str, max_sentences: int = 3, query: Optional[str] = None) -> str:
+    def summarize_text(
+        self, text: str, max_sentences: int = 3, query: Optional[str] = None
+    ) -> str:
         """
         추출적 요약: 문장을 분할하고, query 기반(있으면) 점수로 정렬해 상위 문장 조합 반환
         - max_sentences: 반환할 문장 개수
@@ -130,7 +141,11 @@ class RAGEngine:
         scored = []
         for s in sents:
             # 기본 점수: query overlap
-            score = self._score_sentence_by_query(s, query_tokens) if query_tokens else (len(s.split()) / 20.0)
+            score = (
+                self._score_sentence_by_query(s, query_tokens)
+                if query_tokens
+                else (len(s.split()) / 20.0)
+            )
             scored.append((score, s))
 
         # 높은 점수 순으로 정렬 후 선택
@@ -141,7 +156,13 @@ class RAGEngine:
         chosen_sorted = [s for s in sents if s in chosen]
         return " ".join(chosen_sorted)
 
-    def summarize_hits(self, rag_hits: List[Dict], max_sentences_per_hit: int = 2, budget_sentences: int = 6, query: Optional[str] = None):
+    def summarize_hits(
+        self,
+        rag_hits: List[Dict],
+        max_sentences_per_hit: int = 2,
+        budget_sentences: int = 6,
+        query: Optional[str] = None,
+    ):
         """
         여러 RAG hit들을 합쳐 프롬프트에 넣기 적합한 요약 블록을 생성
         - rag_hits: retrieve() 결과 리스트
@@ -161,11 +182,13 @@ class RAGEngine:
                 break
             take = min(max_sentences_per_hit, remaining)
             summary = self.summarize_text(h["text"], max_sentences=take, query=query)
-            out.append({
-                "doc_id": h["doc_id"],
-                "final_score": h["final_score"],
-                "summary": summary
-            })
+            out.append(
+                {
+                    "doc_id": h["doc_id"],
+                    "final_score": h["final_score"],
+                    "summary": summary,
+                }
+            )
             remaining -= len(self._split_sentences(summary))
 
         return out

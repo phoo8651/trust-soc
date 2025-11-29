@@ -6,7 +6,7 @@ import asyncio
 import os
 
 from typing import Dict, Any, Optional
-from llm.local_llm_PoC import DummyLocalLLM, LocalMistralLLM
+from app.llm.local_llm_PoC import DummyLocalLLM, LocalMistralLLM
 
 # 로그 설정
 logger = logging.getLogger("ModelGateway")

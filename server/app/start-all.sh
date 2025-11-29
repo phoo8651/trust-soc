@@ -1,84 +1,26 @@
-#!/usr/bin/env sh
+#!/bin/bash
 set -e
 
-echo "[entrypoint] waiting for PostgreSQL on ${DB_HOST:-127.0.0.1}:${DB_PORT:-5432}..."
+echo "🚀 Starting SOC Integrated Server..."
 
-# psycopg2 이용해서 간단하게 연결 될 때까지 대기
-python - << 'PY'
-import os, time
-import psycopg2
-
-host = os.getenv("DB_HOST", "127.0.0.1")
-port = int(os.getenv("DB_PORT", "5432"))
-dbname = os.getenv("DB_NAME", "logs_db")
-user = os.getenv("DB_USER", "postgres")
-password = os.getenv("DB_PASS", "password")
-
-while True:
-    try:
-        conn = psycopg2.connect(
-            host=host, port=port, dbname=dbname, user=user, password=password
-        )
-        conn.close()
-        print("[entrypoint] PostgreSQL is ready.")
-        break
-    except Exception as e:
-        print(f"[entrypoint] PostgreSQL not ready yet: {e}")
-        time.sleep(2)
-PY
-
-#############################################
-# 여기부터 LLM용 환경변수 설정
-#############################################
-
-# (선택) /app/.env 파일이 있으면 먼저 로드
-if [ -f /app/.env ]; then
-  echo "[entrypoint] loading /app/.env for LLM..."
-  set -a           # 이후에 로드되는 변수 자동 export
-  . /app/.env
-  set +a
+# 1. .env 파일이 존재하면 로드 (우선순위: OS환경변수 > .env > 기본값)
+if [ -f .env ]; then
+    echo "📜 Loading environment from .env file"
+    export $(cat .env | grep -v '#' | awk '/=/ {print $1}')
 fi
 
-# 기본값 설정 (컨테이너 외부에서 이미 설정해 주면 그 값을 우선 사용)
+# 2. 필수 환경 변수 기본값 설정 (Docker env나 k8s env가 없으면 이 값 사용)
+: "${DATABASE_URL:=postgresql://user:password@localhost:5432/socdb}"
 : "${LLM_MODE:=local}"
-: "${LOCAL_MODEL:=./models/mistral-7b-instruct-v0.2.Q4_K_M.gguf}"
-: "${WEBHOOK_SECRET:=change_me_please}"
+: "${LOCAL_MODEL:=/app/models/mistral-7b-instruct-v0.2.Q4_K_M.gguf}"
+: "${PYTHONPATH:=/app}"
 
-export LLM_MODE LOCAL_MODEL WEBHOOK_SECRET
+export DATABASE_URL LLM_MODE LOCAL_MODEL PYTHONPATH
 
-echo "[entrypoint] LLM env:"
-echo "  LLM_MODE=${LLM_MODE}"
-echo "  LOCAL_MODEL=${LOCAL_MODEL}"
+# 3. 디렉토리 권한 및 존재 여부 체크 (선택 사항)
+mkdir -p /app/models /app/data
 
-#############################################
-# 여기부터는 기존 내용 (backend + llm + detect 시작)
-#############################################
-
-echo "[backend] starting on :8000"
-cd /app/backend/postgres
-uvicorn main:app --host 0.0.0.0 --port 8000 &
-BACKEND_PID=$!
-
-echo "[llm] starting on :9000"
-cd /app
-uvicorn llm.advisor_api:app --host 0.0.0.0 --port 9000 &
-LLM_PID=$!
-
-echo "[detect] starting workers"
-cd /app/detect
-python yara_batch_scanner.py &
-YARA_PID=$!
-python rollup.py &
-ROLLUP_PID=$!
-python ml_detect.py &
-ML_PID=$!
-python hybrid_detect.py &
-HYBRID_PID=$!
-
-echo "[entrypoint] all processes started, waiting..."
-wait $BACKEND_PID $LLM_PID $YARA_PID $ROLLUP_PID $ML_PID $HYBRID_PID
-EXIT_CODE=$?
-
-echo "[entrypoint] one of the processes exited with code ${EXIT_CODE}, shutting down..."
-kill $BACKEND_PID $LLM_PID $YARA_PID $ROLLUP_PID $ML_PID $HYBRID_PID 2>/dev/null || true
-exit $EXIT_CODE
+# 4. 서버 실행
+# exec를 사용하여 쉘 프로세스를 uvicorn 프로세스로 대체 (시그널 전달을 위해 중요)
+echo "🔥 Executing Uvicorn..."
+exec uvicorn main:app --host 0.0.0.0 --port 8000
