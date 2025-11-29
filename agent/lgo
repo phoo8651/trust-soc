@@ -1,13 +1,16 @@
-curl -X POST http://192.168.67.131:30080/v1/logs \
-  -H "Authorization: Bearer acc_de706746-c326-42fa-be79-1da4dfd0055e" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "source": "agent-test",
-    "logs": [
-      {
-        "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
-        "level": "INFO",
-        "message": "Test log from agent manually triggered"
-      }
-    ]
-  }'
+# /home/last/lastagent/etc/.env
+
+# agent-controller 용
+CONTROLLER_URL=http://192.168.67.131:30080
+AGENT_ID=test-agent-id
+AGENT_TOKEN=test-access-token
+AGENT_REFRESH_TOKEN=test-refresh-token
+AGENT_TOKEN_EXPIRES_IN=3600
+
+# secure-forwarder 용
+UPSTREAM_URL=http://192.168.67.131:30080/ingest/logs
+UPSTREAM_LOG_TOKEN=dev_log_token
+HMAC_SECRET=super_secret_hmac_key
+LOCAL_TOKEN=dev_agent_token
+LISTEN_HOST=127.0.0.1
+LISTEN_PORT=19000
