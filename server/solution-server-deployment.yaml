@@ -39,11 +39,11 @@ spec:
             - containerPort: 5432
           env:
             - name: POSTGRES_DB
-              value: "socdb"
+              value: "logs_db"
             - name: POSTGRES_USER
-              value: "soc_user"
+              value: "postgres"
             - name: POSTGRES_PASSWORD
-              value: "soc_password"
+              value: "1q2w3e4r!"
           volumeMounts:
             - name: pg-data
               mountPath: /var/lib/postgresql/data
