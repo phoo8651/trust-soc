@@ -97,3 +97,13 @@
             <small class="text-muted">{{ job.created_at.strftime('%H:%M:%S') }}</small><br>
             <strong>{{ job.job_type }}</strong>
           </div>
+          <span class="badge bg-secondary">{{ job.status }}</span>
+        </li>
+        {% else %}
+        <li class="list-group-item text-center text-muted">No jobs found.</li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+</div>
+{% endblock %}
