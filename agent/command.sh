@@ -24,14 +24,14 @@ BOOTSTRAP_SECRET="dev"
 AGENT_VERSION="0.1.0"
 CLIENT_ID="default"
 
-# ✅ 포트 설정
+# 🔹 포트 설정: register용은 30080 / controller용은 8000
 CONTROLLER_HOST="192.168.67.131"
-REGISTER_PORT="8000"        # agent 등록은 8000 포트
-INGEST_PORT="30080"         # 로그 전송은 30080 포트
+CONTROLLER_PORT="8000"           # agent-controller 통신용
+REGISTER_API_PORT="30080"        # agent-register 전용 (k8s NodePort)
 
-CONTROLLER_URL="http://${CONTROLLER_HOST}:${REGISTER_PORT}"
+CONTROLLER_URL="http://${CONTROLLER_HOST}:${CONTROLLER_PORT}"
 REGISTER_PATH="/api/agent-register"
-REGISTER_URL="${CONTROLLER_URL}${REGISTER_PATH}"
+REGISTER_URL="http://${CONTROLLER_HOST}:${REGISTER_API_PORT}${REGISTER_PATH}"
 
 # ────────────── Helper 함수 ──────────────
 
@@ -131,14 +131,14 @@ EOF
 # lastagent 자동 등록으로 생성된 파일
 
 # agent-controller 용
-CONTROLLER_URL=http://${CONTROLLER_HOST}:${REGISTER_PORT}
+CONTROLLER_URL=${CONTROLLER_URL}
 AGENT_ID=${AGENT_ID}
 AGENT_TOKEN=${TOKEN}
 AGENT_REFRESH_TOKEN=${REFRESH_TOKEN}
 AGENT_TOKEN_EXPIRES_IN=${EXPIRES_IN}
 
 # secure-forwarder 용
-UPSTREAM_URL=http://${CONTROLLER_HOST}:${INGEST_PORT}/ingest/logs
+UPSTREAM_URL=http://${CONTROLLER_HOST}:30080/ingest/logs
 UPSTREAM_LOG_TOKEN=dev_log_token
 HMAC_SECRET=super_secret_hmac_key
 LOCAL_TOKEN=dev_agent_token
