@@ -88,25 +88,29 @@ def transform_otlp(otlp_data):
 # 3. 서버 전송 로직
 def send_to_server(payload):
     body_bytes = json.dumps(payload).encode("utf-8")
-    ts = datetime.now(timezone.utc).isoformat()
-    nonce = str(time.time())
+
+    # 1) 서버 verify_timestamp 가 기대하는 형식: 유닉스 타임(초) 문자열
+    ts = str(int(time.time()))
+
+    # 2) payload 해시 (그냥 sha256 hex 값)
     p_hash = hashlib.sha256(body_bytes).hexdigest()
-    
+
+    # 3) 헤더 이름/값을 IngestController 쪽에 맞춰서 세팅
     headers = {
         "Authorization": f"Bearer {LOG_TOKEN}",
         "Content-Type": "application/json",
-        "X-Client-Id": CLIENT_ID,
-        "X-Request-Timestamp": ts,
-        "X-Payload-Hash": f"sha256:{p_hash}",
-        "X-Nonce": nonce,
-        "X-Idempotency-Key": hashlib.md5((ts + nonce).encode()).hexdigest()
+
+        # IngestController: headers.get("x-request-timestamp")
+        "x-request-timestamp": ts,
+
+        # IngestController: headers.get("x-payload-hash")
+        # → "sha256:..." 말고 그냥 hex 값만
+        "x-payload-hash": p_hash,
+
+        # 아래 것들은 서버에서 안 써도 상관 없음 (있어도 무방)
+        "x-client-id": CLIENT_ID,
+        # "x-idempotency-key": hashlib.md5((ts + p_hash).encode()).hexdigest(),
     }
-    
-    # HMAC 서명 (옵션)
-    if HMAC_SECRET:
-        # 서버 auth_core.py와 동일한 서명 방식 필요 (여기선 단순화)
-        # 실제로는 ingest_router가 서명을 요구하지 않으므로 payload hash로 충분할 수 있음
-        pass
 
     try:
         resp = requests.post(UPSTREAM_URL, data=body_bytes, headers=headers, timeout=5)
@@ -114,6 +118,7 @@ def send_to_server(payload):
     except Exception as e:
         log(f"Upstream Error: {e}")
         return False
+
 
 # 4. HTTP 요청 핸들러
 class RequestHandler(BaseHTTPRequestHandler):
