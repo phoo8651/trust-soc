@@ -24,17 +24,24 @@ BOOTSTRAP_SECRET="dev"
 AGENT_VERSION="0.1.0"
 CLIENT_ID="default"
 
-# ★ 서버 NodePort = 30080, register API는 8000
+# ✅ 포트 설정
 CONTROLLER_HOST="192.168.67.131"
-CONTROLLER_PORT="8000"
-CONTROLLER_URL="http://${CONTROLLER_HOST}:${CONTROLLER_PORT}"
+REGISTER_PORT="8000"        # agent 등록은 8000 포트
+INGEST_PORT="30080"         # 로그 전송은 30080 포트
+
+CONTROLLER_URL="http://${CONTROLLER_HOST}:${REGISTER_PORT}"
 REGISTER_PATH="/api/agent-register"
 REGISTER_URL="${CONTROLLER_URL}${REGISTER_PATH}"
 
-# ────────────── Helper ──────────────
+# ────────────── Helper 함수 ──────────────
 
-log() { echo "[*] $*"; }
-error() { echo "[ERROR] $*" >&2; }
+log() {
+  echo "[*] $*"
+}
+
+error() {
+  echo "[ERROR] $*" >&2
+}
 
 install_service_unit() {
   local src="$1"
@@ -42,7 +49,7 @@ install_service_unit() {
   local name="$3"
 
   if [[ -f "$dst" ]]; then
-    log "${name} service 이미 존재 → 덮어쓰지 않습니다"
+    log "${name} service 이미 존재 → 덮어쓰지 않습니다: ${dst}"
   else
     log "${name} service 신규 설치 → ${dst}"
     cp "$src" "$dst"
@@ -54,7 +61,7 @@ install_service_unit() {
 log "agent 설치 시작"
 
 if [[ "${EUID}" -ne 0 ]]; then
-  error "root 권한이 필요합니다."
+  error "root 권한이 필요합니다. sudo로 실행하세요."
   exit 1
 fi
 
@@ -75,7 +82,7 @@ apt-get update
 apt-get install -y python3 python3-venv curl jq
 
 if [[ ! -d "${REPO_DIR}/venv" ]]; then
-  log "Python venv 생성"
+  log "Python venv 생성: ${REPO_DIR}/venv"
   python3 -m venv "${REPO_DIR}/venv"
 fi
 
@@ -84,11 +91,11 @@ pip install --upgrade pip
 pip install requests PyYAML python-dotenv
 deactivate
 
-# ────────────── .env 자동 생성 ──────────────
+# ✅ .env 자동 생성
 if [[ -f "${ETC_DIR}/.env" ]]; then
-  log "기존 .env 재사용"
+  log "기존 .env 파일 있으므로 재사용합니다: ${ETC_DIR}/.env"
 else
-  log ".env 없음 → 서버에 agent register 요청 중..."
+  log ".env 파일 없음 → 서버에 agent 등록 시도 중..."
 
   HOSTNAME=$(hostname)
 
@@ -106,7 +113,7 @@ EOF
   RESPONSE=$(curl -sS --fail -X POST "${REGISTER_URL}" \
     -H "Content-Type: application/json" \
     -d "${JSON_PAYLOAD}") || {
-      error "agent-register 요청 실패"
+      error "agent-register 요청 실패. 서버/포트/방화벽을 확인하세요. (${REGISTER_URL})"
       exit 1
     }
 
@@ -116,22 +123,22 @@ EOF
   EXPIRES_IN=$(echo "${RESPONSE}" | jq -r '.expires_in // 3600')
 
   if [[ -z "${TOKEN}" || "${TOKEN}" == "null" ]]; then
-    error "access_token 누락됨"
+    error "서버 응답에 access_token 없음. 응답: ${RESPONSE}"
     exit 1
   fi
 
   cat <<EOF > "${ETC_DIR}/.env"
-# lastagent 자동 생성된 파일
+# lastagent 자동 등록으로 생성된 파일
 
 # agent-controller 용
-CONTROLLER_URL=${CONTROLLER_URL}
+CONTROLLER_URL=http://${CONTROLLER_HOST}:${REGISTER_PORT}
 AGENT_ID=${AGENT_ID}
 AGENT_TOKEN=${TOKEN}
 AGENT_REFRESH_TOKEN=${REFRESH_TOKEN}
 AGENT_TOKEN_EXPIRES_IN=${EXPIRES_IN}
 
 # secure-forwarder 용
-UPSTREAM_URL=http://${CONTROLLER_HOST}:30080/ingest/logs
+UPSTREAM_URL=http://${CONTROLLER_HOST}:${INGEST_PORT}/ingest/logs
 UPSTREAM_LOG_TOKEN=dev_log_token
 HMAC_SECRET=super_secret_hmac_key
 LOCAL_TOKEN=dev_agent_token
@@ -141,12 +148,12 @@ EOF
 
   chmod 600 "${ETC_DIR}/.env"
   chown root:root "${ETC_DIR}/.env"
-  log ".env 생성 완료"
+  log ".env 생성 완료 → ${ETC_DIR}/.env"
 fi
 
-# ────────────── agent.yaml 확인 ──────────────
+# 7. agent.yaml 존재 확인
 if [[ ! -f "${ETC_DIR}/agent.yaml" ]]; then
-  error "agent.yaml 없음"
+  error "agent.yaml 이 없습니다: ${ETC_DIR}/agent.yaml"
   exit 1
 fi
 
@@ -160,16 +167,20 @@ chown -R "${AGENT_USER}:nogroup" \
 chmod 750 "${AGENT_HOME}"
 chmod 640 "${AGENT_HOME}/agent.yaml"
 
-# ────────────── systemd 유닛 설치 ──────────────
+# 9. systemd 유닛 설치
 install_service_unit "${ETC_DIR}/otel-agent.service" \
-  "${SYSTEMD_DIR}/otel-agent.service" "otel-agent"
+  "${SYSTEMD_DIR}/otel-agent.service" \
+  "otel-agent"
 
 install_service_unit "${REPO_DIR}/forwarder/secure-forwarder.service" \
-  "${SYSTEMD_DIR}/secure-forwarder.service" "secure-forwarder"
+  "${SYSTEMD_DIR}/secure-forwarder.service" \
+  "secure-forwarder"
 
 install_service_unit "${REPO_DIR}/agent/agent-controller.service" \
-  "${SYSTEMD_DIR}/agent-controller.service" "agent-controller"
+  "${SYSTEMD_DIR}/agent-controller.service" \
+  "agent-controller"
 
+# 10. systemd 적용 및 시작
 systemctl daemon-reload
 systemctl enable otel-agent.service
 systemctl enable secure-forwarder.service
@@ -179,11 +190,12 @@ systemctl restart otel-agent.service
 systemctl restart secure-forwarder.service
 systemctl restart agent-controller.service
 
+# 12. 상태 요약
 echo
 log "서비스 상태 요약:"
-systemctl --no-pager --full status otel-agent.service | sed -n '1,8p'
-systemctl --no-pager --full status secure-forwarder.service | sed -n '1,8p'
-systemctl --no-pager --full status agent-controller.service | sed -n '1,8p'
+systemctl --no-pager --full status otel-agent.service         | sed -n '1,8p'
+systemctl --no-pager --full status secure-forwarder.service   | sed -n '1,8p'
+systemctl --no-pager --full status agent-controller.service   | sed -n '1,8p'
 
 echo
 log "설치 완료. 서비스 실행 중입니다."
