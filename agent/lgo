@@ -1,25 +1,14 @@
-# /home/last/lastagent/etc/.env
-
-# agent-controller 용
+# agent-controller 설정
 CONTROLLER_URL=http://192.168.67.131:30080
-AGENT_ID=test-agent-id
-AGENT_TOKEN=test-access-token
-AGENT_REFRESH_TOKEN=test-refresh-token
+AGENT_ID=default
+AGENT_TOKEN=dummy_token
+AGENT_REFRESH_TOKEN=none
 AGENT_TOKEN_EXPIRES_IN=3600
 
-# secure-forwarder 용
+# secure-forwarder 설정
 UPSTREAM_URL=http://192.168.67.131:30080/ingest/logs
 UPSTREAM_LOG_TOKEN=dev_log_token
 HMAC_SECRET=super_secret_hmac_key
 LOCAL_TOKEN=dev_agent_token
 LISTEN_HOST=127.0.0.1
 LISTEN_PORT=19000
-
-curl -X POST http://127.0.0.1:19000 \
-  -H "Authorization: Bearer dev_agent_token" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "timestamp": "2025-11-29T14:00:00Z",
-    "level": "INFO",
-    "message": "🎯 로그 수동 전송 테스트"
-  }'
