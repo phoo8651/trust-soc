@@ -24,15 +24,11 @@ BOOTSTRAP_SECRET="dev"          # 지금은 사용 안 하지만 남겨둠
 CLIENT_ID="default"             # 서버에서 정의한 client_id
 AGENT_VERSION_NUM=1             # 숫자 1
 
-# ★ 서버 NodePort = 30080, register API 포트도 NodePort 경유로 사용
+# ★ 솔루션 서버 NodePort = 30080
 CONTROLLER_HOST="192.168.67.131"
-
-# 로그 전송은 NodePort 30080 → /ingest/logs
 NODEPORT="30080"
 
-# register 엔드포인트 경로
-#   - 백엔드 라우팅에 따라 아래 둘 중 하나여야 함
-#   - /api/agent-register 로 안되면 /agent-register 시도
+# register 엔드포인트 경로 (백엔드 설정에 맞게 하나만 사용)
 REGISTER_PATH="/api/agent-register"
 #REGISTER_PATH="/agent-register"
 
@@ -143,14 +139,15 @@ EOF
   cat <<EOF > "${ETC_DIR}/.env"
 # lastagent 자동 등록으로 생성된 파일
 
-# agent-controller 용
+# agent-controller 설정
 CONTROLLER_URL=${CONTROLLER_URL}
+CLIENT_ID=${CLIENT_ID}
 AGENT_ID=${AGENT_ID}
 AGENT_TOKEN=${TOKEN}
 AGENT_REFRESH_TOKEN=${REFRESH_TOKEN}
 AGENT_TOKEN_EXPIRES_IN=${EXPIRES_IN}
 
-# secure-forwarder 용 (솔루션 서버 NodePort 경유)
+# secure-forwarder 설정 (솔루션 서버 NodePort 경유)
 UPSTREAM_URL=http://${CONTROLLER_HOST}:${NODEPORT}/ingest/logs
 UPSTREAM_LOG_TOKEN=dev_log_token
 HMAC_SECRET=super_secret_hmac_key
