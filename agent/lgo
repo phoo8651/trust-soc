@@ -1,14 +1,23 @@
-curl -X POST http://127.0.0.1:19000/v1/logs \
-  -H "Authorization: Bearer dev_agent_token" \
+cd /home/last/lastagent
+
+grep -E 'LOCAL_TOKEN|LISTEN_PORT|UPSTREAM_URL|AGENT_TOKEN' etc/.env
+
+
+cd /home/last/lastagent
+
+set -a
+source etc/.env
+set +a
+
+curl -X POST "http://127.0.0.1:${LISTEN_PORT}/v1/logs" \
+  -H "Authorization: Bearer ${LOCAL_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{
     "resourceLogs": [{
       "scopeLogs": [{
         "logRecords": [{
           "timeUnixNano": 1732900000000000000,
-          "body": {
-            "stringValue": "✅ OTLP → ingest/logs 정상 테스트 로그입니다."
-          }
+          "body": { "stringValue": "✅ OTLP → ingest/logs 수동 테스트 로그입니다." }
         }]
       }]
     }]
