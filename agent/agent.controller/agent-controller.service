@@ -1,14 +1,13 @@
-[Unit]
-Description=Agent Controller (pull commands from control API)
-After=network-online.target secure-forwarder.service
-Wants=network-online.target
+@@ -5,72 +5,32 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+User=root
 
 User=root                                 # otel-agent 재시작(systemctl) 위해 root 유지
 
 # 작업 디렉터리: lastagent 구조에 맞게 변경
+# 작업 디렉터리 (코드 기준 위치)
 WorkingDirectory=/home/last/lastagent/agent
 
 # ─────────────────────────────────────────────
@@ -31,6 +30,8 @@ EnvironmentFile=/home/last/lastagent/etc/.env
 
 # venv 기반 파이썬으로 agent_controller 실행
 ExecStart=/home/last/lastagent/venv/bin/python /home/last/lastagent/agent/agent_controller.py
+# 실행 명령 (venv 기반 Python)
+ExecStart=/home/last/lastagent/venv/bin/python /home/last/lastagent/agent/agent-controller.py
 
 Restart=always
 RestartSec=5
@@ -73,6 +74,3 @@ ReadWritePaths=/etc/secure-log-agent/remote.d
 # systemd와 통신(systemctl reload/restart) 위해 런타임 영역 허용
 ReadWritePaths=/run
 ReadWritePaths=/var/run
-
-[Install]
-WantedBy=multi-user.target
