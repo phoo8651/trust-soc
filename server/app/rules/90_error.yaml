@@ -1,0 +1,7 @@
+rule_id: APP_ERROR
+type: rule
+description: "Application Error Detected"
+score: 0.4
+keywords:
+  - "error"
+  - "exception"

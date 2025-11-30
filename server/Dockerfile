@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     libpq-dev \
     libyara-dev \
     curl \
+    fonts-nanum \
     && rm -rf /var/lib/apt/lists/*
 
 # 2. 의존성 설치

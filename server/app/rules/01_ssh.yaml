@@ -1,0 +1,8 @@
+rule_id: SSH_BRUTE_FORCE
+type: rule
+description: "SSH Authentication Failed"
+score: 0.8
+# keywords: 단순 문자열 포함 여부 (대소문자 무시)
+keywords:
+  - "failed password"
+  - "authentication failure"

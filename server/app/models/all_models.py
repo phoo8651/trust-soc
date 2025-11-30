@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, Integer, Text, Boolean, TIMESTAMP, func, BigInteger, Identity, UniqueConstraint
+from sqlalchemy import Column, String, Integer, Text, Boolean, TIMESTAMP, func, BigInteger, Identity, UniqueConstraint, Numeric
 from sqlalchemy.dialects.postgresql import JSONB
 from app.core.database import Base
 
@@ -29,7 +29,6 @@ class IdempotencyKey(Base):
 
 class RawLog(Base):
     __tablename__ = "raw_logs"
-    # Postgres Partitioning을 고려하여 Identity 사용
     id = Column("id", BigInteger, Identity(always=False), primary_key=True)
     ts = Column(TIMESTAMP(timezone=True), nullable=False)
     client_id = Column(String, nullable=False)
@@ -52,6 +51,7 @@ class Event(Base):
     summary = Column(Text)
     evidence_refs = Column(JSONB, nullable=False, default=list)
     rule_id = Column(String)
+    ml_score = Column(Numeric)
     context = Column(JSONB)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
@@ -78,7 +78,7 @@ class Job(Base):
     status = Column(String, default="pending")
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     signature = Column(Text)
-    
+
 class Policy(Base):
     __tablename__ = "policies"
     policy_id = Column(Integer, primary_key=True, autoincrement=True)

@@ -1,0 +1,9 @@
+rule_id: TEST_LOG
+type: test
+description: "Manual Test Log"
+score: 0.5
+keywords:
+  - "manual test"
+  - "test log"
+tags:
+  - "test"

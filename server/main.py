@@ -1,8 +1,11 @@
 import os
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from starlette.middleware.base import BaseHTTPMiddleware
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
 # 1. .env 파일 자동 생성
 ENV_PATH = ".env"
@@ -23,19 +26,21 @@ if not os.path.exists(ENV_PATH):
         f.write(DEFAULT_ENV)
     print(f"✅ Created default .env at {os.path.abspath(ENV_PATH)}")
 
-# 2. 모듈 임포트
+# 1. 환경설정 및 DB 초기화 모듈
 from app.core.config import settings
 from app.core.database import init_db
 from app.core.security import set_current_client
-from app.api import ingest, auth, llm_router  # llm_router 추가
+
+# 2. [수정] 새로운 라우터 및 서비스 임포트
+from app.api import ingest, auth, llm_router, console
 from app.controllers.detect_controller import DetectController
 from app.controllers.llm_controller import LLMController
 from app.services.advisor_service import AdvisorService
 from app.core.bootstrap import BootstrapManager
-from app.api import console
+
+logger = logging.getLogger("main")
 
 
-# 3. 미들웨어
 class TenantContextMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         client_id = request.headers.get("X-Client-Id") or request.headers.get(
@@ -53,11 +58,12 @@ async def lifespan(app: FastAPI):
     init_db()
 
     print("🔐 Starting Bootstrap Secret Rotation...")
-    BootstrapManager.start()  # [New] 키 갱신 시작
+    BootstrapManager.start()
 
     print("📚 Initializing LLM Advisor...")
-    _ = AdvisorService()
+    _ = AdvisorService()  # 모델 및 RAG 로드
 
+    # [중요] 백그라운드 컨트롤러 시작 (이 부분이 있어야 Detect 모듈이 돕니다)
     print("🚀 Starting Background Controllers...")
     detect_ctrl = DetectController()
     llm_ctrl = LLMController()
@@ -67,20 +73,44 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    print("🛑 Shutting down...")
+    print("🛑 Shutting down controllers...")
     task1.cancel()
     task2.cancel()
     BootstrapManager.stop()
 
 
-# 5. 앱 정의
 app = FastAPI(title="Integrated SOC Server", lifespan=lifespan)
 app.add_middleware(TenantContextMiddleware)
+
+
+# 스키마 불일치 (Validation Error) -> 400 Bad Request 변환
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    error_details = exc.errors()
+    logger.warning(f"⚠️ Validation Error: {error_details}")
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={
+            "detail": "Invalid request schema",
+            "errors": error_details,  # 구체적으로 어떤 필드가 틀렸는지 알려줌
+        },
+    )
+
+
+# 알 수 없는 서버 에러 -> 500 처리 (로그 남김)
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    logger.error(f"❌ Server Error: {str(exc)}", exc_info=True)
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"detail": "Internal Server Error. Please check server logs."},
+    )
+
 
 # 라우터 등록
 app.include_router(auth.router)
 app.include_router(ingest.router)
-app.include_router(llm_router.router, prefix="/llm")  # /llm/analyze
+app.include_router(llm_router.router, prefix="/llm")
 app.include_router(console.router, prefix="/console")
 
 

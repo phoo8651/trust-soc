@@ -2,7 +2,12 @@ import os
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.core.database import get_db
-from app.schemas.all_schemas import RegisterRequest, RegisterResponse
+from app.schemas.all_schemas import (
+    RegisterRequest,
+    RegisterResponse,
+    RenewRequest,
+    RenewResponse,
+)
 from app.services.auth_service import AuthService
 from app.core.bootstrap import BootstrapManager
 
@@ -31,3 +36,17 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
         "refresh_token": ref,
         "expires_in": exp,
     }
+
+
+@router.post("/auth/renew", response_model=RenewResponse)
+def renew_token(req: RenewRequest, db: Session = Depends(get_db)):
+    svc = AuthService(db)
+    result = svc.renew_token(req.agent_id, req.refresh_token)
+
+    if not result:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid agent_id or refresh_token",
+        )
+
+    return result

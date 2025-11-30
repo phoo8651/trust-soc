@@ -1,6 +1,23 @@
 {% extends "base.html" %}
 
 {% block content %}
+<div class="toast-container position-fixed top-0 end-0 p-3" style="z-index: 1100;">
+  <div id="incidentToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+    <div class="toast-header bg-danger text-white">
+      <strong class="me-auto">🚨 New Incident Detected!</strong>
+      <small>Just now</small>
+      <button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast" aria-label="Close"></button>
+    </div>
+    <div class="toast-body">
+      <p id="toastSummary" class="mb-1 fw-bold">Suspicious activity detected</p>
+      <div class="d-flex justify-content-between align-items-center">
+        <span id="toastConfidence" class="badge bg-warning text-dark">Conf: 85%</span>
+        <a href="/console/incidents" class="btn btn-sm btn-outline-danger">View Details</a>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="alert alert-primary d-flex align-items-center justify-content-between shadow-sm mb-4" role="alert">
   <div>
     <i class="bi bi-key-fill me-2"></i>
@@ -10,6 +27,7 @@
   </div>
   <small class="text-muted">Use this key in <code>install_lastagent.sh</code></small>
 </div>
+
 <div class="row mb-4">
   <div class="col-md-3">
     <div class="card card-stat shadow-sm">
@@ -85,7 +103,7 @@
             </tr>
             {% else %}
             <tr>
-              <td colspan="5" class="text-center">No recent incidents.</td>
+              <td colspan="5" class="text-center py-3 text-muted">No recent incidents.</td>
             </tr>
             {% endfor %}
           </tbody>
@@ -109,10 +127,40 @@
           <span class="badge bg-secondary">{{ job.status }}</span>
         </li>
         {% else %}
-        <li class="list-group-item text-center text-muted">No jobs found.</li>
+        <li class="list-group-item text-center text-muted py-3">No jobs found.</li>
         {% endfor %}
       </ul>
     </div>
   </div>
 </div>
+
+<script>
+  document.addEventListener('DOMContentLoaded', function () {
+    // 페이지 로드 시점을 기준 시간으로 설정 (Unix Timestamp)
+    let lastCheckTime = Math.floor(Date.now() / 1000);
+    const toastEl = document.getElementById('incidentToast');
+    const toast = new bootstrap.Toast(toastEl);
+
+    // 5초마다 서버에 새로운 사고가 있는지 확인
+    setInterval(function () {
+      fetch(`/console/api/updates?last_check=${lastCheckTime}`)
+        .then(response => response.json())
+        .then(data => {
+          // 현재 시간을 갱신 (다음 확인을 위해)
+          lastCheckTime = Math.floor(Date.now() / 1000);
+
+          if (data.has_new && data.incident) {
+            // 알림 내용 채우기
+            document.getElementById('toastSummary').textContent = data.incident.summary;
+            const confSpan = document.getElementById('toastConfidence');
+            confSpan.textContent = `Conf: ${data.incident.confidence}%`;
+
+            // 팝업 표시
+            toast.show();
+          }
+        })
+        .catch(err => console.error('Polling error:', err));
+    }, 5000);
+  });
+</script>
 {% endblock %}

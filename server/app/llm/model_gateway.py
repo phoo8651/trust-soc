@@ -1,4 +1,3 @@
-#llm/model_gateway.py
 import time
 import logging
 import hashlib
@@ -6,6 +5,8 @@ import asyncio
 import os
 
 from typing import Dict, Any, Optional
+
+# [수정] 경로 변경: llm -> app.llm
 from app.llm.local_llm_PoC import DummyLocalLLM, LocalMistralLLM
 
 # 로그 설정
@@ -23,39 +24,41 @@ class ModelGateway:
 
     def __init__(
         self,
-        local_model_path: str,   # GGUF 모델 파일 경로
+        local_model_path: str,  # GGUF 모델 파일 경로
         use_real_llm: bool = True,  # 실제 LLM 사용할지 여부
         enable_fallback: bool = True,  # 실패 시 더미 모델 fallback
         monitoring_enabled: bool = True,  # 성능 로그 기록 여부
-        timeout: float = 60  # 최대 응답 대기 시간
+        timeout: float = 60,  # 최대 응답 대기 시간
     ):
         self.timeout = timeout
         self.enable_fallback = enable_fallback
         self.monitoring_enabled = monitoring_enabled
         self.mock_mode = False
-        self.cache_enabled = False #캐시 비활성화 상태
+        self.cache_enabled = False  # 캐시 비활성화 상태
         self.cache: Dict[str, Any] = {}
-
 
         # 실제 모델 사용 여부에 따라 로드
         if use_real_llm:
-            logger.info(f"🔹 Local LLM 모델 로드: {local_model_path}")
-            # 모델 파일 유효한지 확인
-            if not local_model_path or not os.path.exists(local_model_path):
-                logger.warning("🧪 No local model found → DummyLocalLLM fallback")
-                self.llm = DummyLocalLLM()
-            else:
-                # mistral-7b-instruct GGUF 전용 로컬 LLM
+            try:
                 self.llm = LocalMistralLLM(model_path=local_model_path)
+                self.mock_mode = False
+            except Exception as e:
+                logger.error(f"Failed to load Local LLM: {e}")
+                if not enable_fallback:
+                    raise e
+                logger.warning("Falling back to Dummy LLM due to load failure.")
+                self.llm = DummyLocalLLM()
+                self.mock_mode = True
         else:
-            logger.info("⚙ DummyLocalLLM 사용")
             self.llm = DummyLocalLLM()
+            self.mock_mode = True
 
-    # ---------------------------------------------------------
-    #  모델 호출 함수 (비동기)
-    # ---------------------------------------------------------
     async def generate(self, prompt: str) -> str:
+        """
+        LLM 생성 요청 (비동기 래퍼)
+        """
         start = time.time()
+        # 캐시 키 생성 (Simple SHA256 of prompt)
         cache_key = hashlib.sha256(prompt.encode()).hexdigest()
 
         try:
@@ -68,9 +71,9 @@ class ModelGateway:
                 output = '{"summary": "Mock summary for test", "confidence": 0.5}'
             else:
                 # Thread + Timeout 적용
+                # LocalMistralLLM.generate는 동기 함수이므로 to_thread로 실행
                 output = await asyncio.wait_for(
-                    asyncio.to_thread(self.llm.generate, prompt),
-                    timeout=self.timeout
+                    asyncio.to_thread(self.llm.generate, prompt), timeout=self.timeout
                 )
 
             if self.cache_enabled:
@@ -83,7 +86,9 @@ class ModelGateway:
                 raise
 
             logger.info("⚠ Dummy 모델로 Fallback 처리")
-            from llm.local_llm_PoC import DummyLocalLLM
+            # [수정] 경로 변경: llm -> app.llm
+            from app.llm.local_llm_PoC import DummyLocalLLM
+
             dummy = DummyLocalLLM()
             output = dummy.generate(prompt)
 
@@ -93,10 +98,5 @@ class ModelGateway:
 
         return output
 
-
-
-    # ---------------------------------------------------------
-    #  Metric Logging (토큰수 및 응답 시간 측정)
-    # ---------------------------------------------------------
     def log_metrics(self, tokens_used: int, duration: float):
-        logger.info(f"📊 [Metrics] 사용 토큰수={tokens_used}, 응답시간={duration:.2f}초")
+        logger.info(f"[Metrics] Tokens: {tokens_used}, Duration: {duration:.2f}s")

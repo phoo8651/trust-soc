@@ -66,3 +66,49 @@ class AuthService:
             return False
 
         return True
+
+    def renew_token(self, agent_id: str, refresh_token: str):
+        """
+        리프레시 토큰을 검증하고 새로운 토큰 쌍을 발급합니다.
+        """
+        # 1. 에이전트 조회 및 리프레시 토큰 검증
+        agent = self.db.query(Agent).filter(Agent.agent_id == agent_id).first()
+
+        if not agent:
+            return None
+
+        # DB에 저장된 리프레시 토큰과 일치하는지 확인
+        if agent.refresh_token != refresh_token:
+            # 보안 경고: 탈취된 토큰 사용 시도일 수 있음
+            self.db.add(
+                AuditLog(
+                    actor="system",
+                    action="token_renew_failed",
+                    subject=agent_id,
+                    context={"reason": "invalid_refresh_token"},
+                )
+            )
+            self.db.commit()
+            return None
+
+        # 2. 새로운 토큰 생성 (Rotation)
+        new_access = f"acc_{uuid.uuid4().hex}"
+        new_refresh = f"ref_{uuid.uuid4().hex}"
+        ttl = settings.ACCESS_TOKEN_TTL_SECONDS
+        new_exp = datetime.now(timezone.utc) + timedelta(seconds=ttl)
+
+        # 3. DB 업데이트
+        agent.access_token = new_access
+        agent.refresh_token = new_refresh
+        agent.access_expires = new_exp
+
+        # 4. Audit Log 기록
+        self.db.add(AuditLog(actor="system", action="token_renewed", subject=agent_id))
+
+        self.db.commit()
+
+        return {
+            "access_token": new_access,
+            "refresh_token": new_refresh,
+            "expires_in": ttl,
+        }

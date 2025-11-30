@@ -1,53 +1,47 @@
-{% extends "base.html" %}
+<thead>
+    <tr>
+        <th>ID</th>
+        <th>Time</th>
+        <th>Client</th>
+        <th>Summary</th>
+        <th>Rec. Actions</th>
+        <th>Status</th>
+        <th>Report</th>
+    </tr>
+</thead>
 
-{% block content %}
-<div class="d-flex justify-content-between align-items-center mb-4">
-    <h2>Incident History</h2>
-    <button class="btn btn-outline-primary" onclick="location.reload()">Refresh</button>
-</div>
+<tbody>
+    {% for inc in incidents %}
+    <tr>
+        <td><small class="text-muted">{{ inc.incident_id.split('-')[-1] }}</small></td>
+        <td>{{ inc.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+        <td>{{ inc.client_id }}</td>
+        <td>{{ inc.summary }}</td>
+        <td>
+            {% if inc.recommended_actions %}
+            {% for act in inc.recommended_actions %}
+            <span class="badge bg-light text-dark border">{{ act.action if act.action else act }}</span>
+            {% endfor %}
+            {% else %}
+            <span class="text-muted">-</span>
+            {% endif %}
+        </td>
+        <td>
+            {{ inc.status }}
+        </td>
 
-<div class="card shadow-sm">
-    <div class="table-responsive">
-        <table class="table table-striped mb-0 align-middle">
-            <thead>
-                <tr>
-                    <th>ID</th>
-                    <th>Time</th>
-                    <th>Client</th>
-                    <th>Summary</th>
-                    <th>Rec. Actions</th>
-                    <th>Status</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for inc in incidents %}
-                <tr>
-                    <td><small class="text-muted">{{ inc.incident_id.split('-')[-1] }}</small></td>
-                    <td>{{ inc.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
-                    <td>{{ inc.client_id }}</td>
-                    <td>{{ inc.summary }}</td>
-                    <td>
-                        {% if inc.recommended_actions %}
-                        {% for act in inc.recommended_actions %}
-                        <span class="badge bg-light text-dark border">{{ act.action if act.action else act }}</span>
-                        {% endfor %}
-                        {% else %}
-                        <span class="text-muted">-</span>
-                        {% endif %}
-                    </td>
-                    <td>
-                        {% if inc.status == 'pending_approval' %}
-                        <span class="badge bg-info text-dark">Pending</span>
-                        {% elif inc.status == 'approved' %}
-                        <span class="badge bg-success">Approved</span>
-                        {% else %}
-                        <span class="badge bg-secondary">{{ inc.status }}</span>
-                        {% endif %}
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-</div>
-{% endblock %}
+        <td>
+            <a href="/console/incidents/{{ inc.incident_id }}/pdf" class="btn btn-sm btn-outline-danger"
+                title="Download PDF">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor"
+                    class="bi bi-file-earmark-pdf" viewBox="0 0 16 16">
+                    <path
+                        d="M14 14V4.5L9.5 0H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2zM9.5 3A1.5 1.5 0 0 0 11 4.5h2V14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1h5.5v2z" />
+                    <path
+                        d="M4.603 14.087a.81.81 0 0 1-.438-.42c-.195-.388-.13-.776.08-1.102.198-.307.526-.568.897-.787a7.68 7.68 0 0 1 1.482-.645 19.697 19.697 0 0 0 1.062-2.227 7.269 7.269 0 0 1-.43-1.295c-.086-.4-.119-.796-.046-1.136.075-.354.274-.672.65-.823.192-.077.4-.12.602-.077a.7.7 0 0 1 .477.365c.088.164.12.356.127.538.007.188-.012.396-.047.614-.084.51-.27 1.134-.52 1.794a10.954 10.954 0 0 0 .98 1.686 5.753 5.753 0 0 1 1.334.05c.364.066.734.195.96.465.12.144.193.32.2.518.007.192-.047.382-.138.563a1.04 1.04 0 0 1-.354.416.856.856 0 0 1-.51.138c-.331-.014-.654-.196-.933-.417a5.712 5.712 0 0 1-.911-.95 11.651 11.651 0 0 0-1.997.406 11.307 11.307 0 0 1-1.02 1.51c-.292.35-.609.656-.927.787a.793.793 0 0 1-.58.029zm1.379-1.901c-.166.076-.32.156-.459.238-.328.194-.541.383-.647.545-.094.148-.096.35.04.535.071.096.163.152.261.168.175.027.352-.06.529-.214.27-.232.535-.55.729-.828.093-.133.186-.277.28-.427l-.733-.013z" />
+                </svg>
+            </a>
+        </td>
+    </tr>
+    {% endfor %}
+</tbody>

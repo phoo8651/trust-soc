@@ -1,0 +1,12 @@
+rule_id: SQL_INJECTION_ATTEMPT
+type: threat
+description: "SQL Injection Pattern Detected"
+score: 0.9
+# patterns: 정규식 매칭
+patterns:
+  - "sqlmap"
+  - "union.*select"
+  - "sleep\\(\\d+\\)"
+  - "information_schema"
+  - "benchmark\\("
+  - "1=1"
