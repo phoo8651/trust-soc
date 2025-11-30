@@ -1,14 +1,4 @@
-# llm/attack_mapper.py
-"""
-MITRE ATT&CK Hybrid 매핑 엔진
-- Rule 기반 Static 매핑
-- evidence 기반 confidence 보정
-- LLM 보조 매핑 (fallback + hybrid boost)
-- 화이트리스트/블랙리스트 정책
-- severity 기반 priority 보정
-- MITRE DB metadata enrich
-"""
-
+# server/app/llm/attack_mapper.py
 import re
 import json
 import logging
@@ -26,26 +16,21 @@ class AttackMapper:
         self.tech_index: Dict[str, Dict[str, Any]] = {}
         self._load_mitre_db()
 
-        # priority for confidence boost
         self.rule_priority = {
             "high": 0.05,
             "medium": 0.03,
             "low": 0.01,
         }
 
-        # allow/deny lists
-        self.allowlist = {
-            "T1110.001": True,
-        }
-        self.denylist = {
-            # 예: 특정 환경 오탐 제거용
-            # "T1110": True,
-        }
+        self.allowlist = {"T1110.001": True}
+        self.denylist = {}
 
+        # [수정] 규칙 대폭 추가
         self.rules: List[Dict[str, Any]] = [
+            # 1. SSH Brute Force
             {
                 "id": "T1110.001",
-                "name": "Brute Force: Password Guessing",
+                "name": "Password Brute Force",
                 "severity": "high",
                 "confidence": 0.80,
                 "patterns": [
@@ -53,77 +38,91 @@ class AttackMapper:
                     r"ssh login failed",
                     r"password authentication failed",
                     r"invalid user",
-                    r"too many authentication failures",
-                    r"authentication failure",
                 ],
             },
-            {
-                "id": "T1110",
-                "name": "Brute Force",
-                "severity": "medium",
-                "confidence": 0.60,
-                "patterns": [
-                    r"brute force",
-                    r"multiple failed login",
-                    r"login attempt",
-                ],
-            },
+            # 2. Scheduled Task
             {
                 "id": "T1053.005",
                 "name": "Scheduled Task",
                 "severity": "medium",
                 "confidence": 0.65,
                 "patterns": [
-                    r"schtasks\.exe",
+                    r"schtasks",
                     r"scheduled task",
-                    r"task scheduler",
-                    r"new task .* /ru system",
-                    r"created new task",
                 ],
             },
+            # 3. Web Shell
             {
                 "id": "T1505.003",
                 "name": "Web Shell",
                 "severity": "high",
-                "confidence": 0.70,
+                "confidence": 0.85,
                 "patterns": [
                     r"webshell",
-                    r"web shell",
                     r"\.php\?cmd=",
                     r"cmd\.exe /c",
-                    r"wget .* /tmp/",
+                ],
+            },
+            # 4. [NEW] RCE / Reverse Shell (Unix Shell)
+            {
+                "id": "T1059.004",
+                "name": "Command and Scripting Interpreter: Unix Shell",
+                "severity": "critical",
+                "confidence": 0.95,
+                "patterns": [
+                    r"/bin/bash",
+                    r"/bin/sh",
+                    r"/dev/tcp/",  # Bash Reverse Shell
+                    r"nc\s+.*-e",  # Netcat Execute
+                    r"exec\s+5<>/dev/tcp",
+                    r"python.*import\s+socket.*connect",
+                    r"curl\s+.*\|\s*bash",  # Pipe to bash
+                ],
+            },
+            # 5. [NEW] SQL Injection (Public-Facing Application Exploit)
+            {
+                "id": "T1190",
+                "name": "Exploit Public-Facing Application (SQLi)",
+                "severity": "high",
+                "confidence": 0.90,
+                "patterns": [
+                    r"sqlmap",
+                    r"union.*select",
+                    r"information_schema",
+                    r"benchmark\(",
+                    r"sleep\(\d+\)",
+                    r"or\s+1=1",
+                    r"select\s+.*\s+from",
                 ],
             },
         ]
 
     def _load_mitre_db(self) -> None:
+        # 경로 수정 (현재 파일 위치 기준)
         base_dir = Path(__file__).resolve().parent
-        candidates = [
-            base_dir / "attack_db" / "enterprise_techniques.json",
-            base_dir.parent / "llm" / "attack_db" / "enterprise_techniques.json",
-        ]
+        # attack_db 폴더가 같은 레벨에 있다고 가정
+        path = base_dir / "attack_db" / "enterprise_techniques.json"
 
-        for path in candidates:
-            if path.exists():
-                try:
-                    data = json.loads(path.read_text(encoding="utf-8"))
-                    for item in data:
-                        t_id = item.get("id")
-                        if t_id:
-                            self.tech_index[t_id] = {
-                                "description": item.get("description", ""),
-                                "examples": item.get("examples", []),
-                                "related_techniques": item.get("related_techniques", []),
-                                "platforms": item.get("platforms", []),
-                                "detection_hints": item.get("detection_hints", []),
-                            }
-                    logger.info("[AttackMapper] Loaded %d MITRE techniques", len(self.tech_index))
-                    return
-                except Exception as e:
-                    logger.error("[AttackMapper] Failed: %s", e)
-                    return
-
-        logger.warning("[AttackMapper] MITRE DB not found → no metadata")
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                for item in data:
+                    t_id = item.get("id")
+                    if t_id:
+                        self.tech_index[t_id] = {
+                            "description": item.get("description", ""),
+                            "examples": item.get("examples", []),
+                            "related_techniques": item.get("related_techniques", []),
+                            "platforms": item.get("platforms", []),
+                            "detection_hints": item.get("detection_hints", []),
+                        }
+                logger.info(
+                    "[AttackMapper] Loaded %d MITRE techniques", len(self.tech_index)
+                )
+            except Exception as e:
+                logger.error("[AttackMapper] JSON Load Failed: %s", e)
+        else:
+            logger.warning("[AttackMapper] MITRE DB not found at %s", path)
 
     def _lookup_name(self, ttp_id: str, fallback: str) -> str:
         return self.tech_index.get(ttp_id, {}).get("name", fallback)
@@ -136,21 +135,15 @@ class AttackMapper:
     ) -> List[Dict[str, Any]]:
 
         text = (event_text or "").lower()
+        # Evidence의 snippet들도 매핑 대상에 포함
         snippets = " ".join(str(e.get("snippet", "")) for e in evidences).lower()
         combined = f"{text} {snippets}"
 
         results: Dict[str, Dict[str, Any]] = {}
 
-        # evidence bonus
-        evidence_count = len(evidences)
-        has_yara_hex = any(e.get("type") in ("yara", "hex") for e in evidences)
-
-        evidence_bonus = min(0.15, 0.05 * evidence_count)
-        if has_yara_hex:
-            evidence_bonus += 0.05
-
-        # --- (1) Static 매핑 ---
+        # --- (1) Static Rule Matching ---
         for rule in self.rules:
+            # 정규식 매칭 확인
             matched = [p for p in rule["patterns"] if re.search(p, combined)]
             if not matched:
                 continue
@@ -158,61 +151,46 @@ class AttackMapper:
             if self.denylist.get(rule["id"], False):
                 continue
 
-            base = rule["confidence"]
-            pattern_bonus = 0.03 * (len(matched) - 1)
-            conf = base + evidence_bonus + pattern_bonus
-
-            # severity priority boost
-            conf += self.rule_priority.get(rule["severity"], 0.0)
-
-            # allowlist boost
-            if self.allowlist.get(rule["id"], False):
-                conf += 0.05
-
             ttp_id = rule["id"]
-            conf = round(min(1.0, conf), 2)
+
+            # 점수 계산 (기본 점수 + 매칭 패턴 수 보너스)
+            conf = rule["confidence"] + (0.02 * (len(matched) - 1))
+            conf = min(1.0, conf)
 
             results[ttp_id] = {
                 "id": ttp_id,
                 "name": self._lookup_name(ttp_id, rule["name"]),
                 "severity": rule["severity"],
-                "confidence": conf,
+                "confidence": round(conf, 2),
                 "matched_patterns": matched,
                 "source": "static",
             }
 
-        # --- (2) LLM fallback 보조 ---
+        # --- (2) LLM Suggestions Merge (Optional) ---
         if llm_suggestions:
             for item in llm_suggestions:
-                ttp_id = item["id"]
-                llm_conf = item.get("confidence", 0.5)
-
-                if self.denylist.get(ttp_id, False):
+                ttp_id = item.get("id")
+                if not ttp_id:
                     continue
 
-                # LLM only
                 if ttp_id not in results:
+                    # LLM only
                     results[ttp_id] = {
                         "id": ttp_id,
                         "name": self._lookup_name(ttp_id, ttp_id),
                         "severity": "medium",
-                        "confidence": round(llm_conf * 0.8, 2),
-                        "matched_patterns": [],
-                        "source": "llm_fallback",
+                        "confidence": 0.5,  # LLM 단독은 신뢰도 낮게 시작
+                        "source": "llm",
                     }
                 else:
-                    # Hybrid confidence
-                    sc = results[ttp_id]["confidence"]
-                    conf = sc * self.STATIC_WEIGHT + llm_conf * self.LLM_WEIGHT
-                    results[ttp_id]["confidence"] = round(min(1.0, conf), 2)
+                    # Hybrid Boost (Static + LLM 둘 다 탐지 시 점수 상향)
+                    results[ttp_id]["confidence"] = min(
+                        1.0, results[ttp_id]["confidence"] + 0.1
+                    )
                     results[ttp_id]["source"] = "hybrid"
 
-        # enrich metadata
-        final = []
-        for r in results.values():
-            meta = self.tech_index.get(r["id"], {})
-            r["tech_meta"] = meta
-            final.append(r)
-
+        # 결과 리스트 변환 및 정렬
+        final = list(results.values())
         final.sort(key=lambda x: x["confidence"], reverse=True)
+
         return final

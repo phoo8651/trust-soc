@@ -1,14 +1,11 @@
 import logging
 import asyncio
-import hashlib  # [New] 해시 계산용
+import hashlib
 from app.core.queues import queues
 from app.core.database import SessionLocal
 from app.services.advisor_service import AdvisorService
 from app.models.all_models import Incident, Job
-from app.llm.models import (
-    IncidentAnalysisRequest,
-    EvidenceRef,
-)  # [New] EvidenceRef 임포트
+from app.llm.models import IncidentAnalysisRequest, EvidenceRef
 
 logger = logging.getLogger("llm_ctrl")
 
@@ -27,7 +24,7 @@ class LLMController:
                 meta = item.get("meta", {})
                 record = item.get("record", {})
 
-                # [수정] EvidenceRef 생성 (빈 리스트 방지)
+                # EvidenceRef 생성
                 raw_line = record.get("raw_line", "")
                 evidence = EvidenceRef(
                     type="raw",
@@ -35,16 +32,15 @@ class LLMController:
                     source=record.get("source_type", "unknown"),
                     offset=0,
                     length=len(raw_line),
-                    # 간단한 SHA256 계산 (필수 필드)
                     sha256=hashlib.sha256(raw_line.encode("utf-8")).hexdigest(),
                     rule_id="detect_module",
                 )
 
-                # 2. Request 생성 (증거 포함)
+                # 2. Request 생성
                 req = IncidentAnalysisRequest(
                     incident_id=f"inc-{item.get('agent_id')}-{int(asyncio.get_event_loop().time())}",
-                    event_text=f"Threat detected on {meta.get('host')}. Score: {analysis.get('max_score')}\nLog: {raw_line[:200]}",
-                    evidences=[evidence],  # [수정] 생성한 증거 객체 전달
+                    event_text=f"Threat detected on {meta.get('host')}. Score: {analysis.get('max_score')}\nLog: {raw_line[:300]}",
+                    evidences=[evidence],
                 )
 
                 # 3. Advisor 분석 실행
@@ -60,20 +56,24 @@ class LLMController:
                 queues.llm_queue.task_done()
 
     def _save(self, db, item, result):
+        # [수정] attack_mapping을 DB 컬럼에 명시적으로 매핑
         inc = Incident(
             client_id=item["meta"]["client_id"],
             summary=result.summary,
             status="new" if result.status == "pending_approval" else "active",
+            # 여기가 핵심 수정 사항입니다:
+            attack_mapping=result.attack_mapping,
             recommended_actions=[{"action": a} for a in result.recommended_actions],
             confidence=int(result.confidence * 100),
+            # 메타데이터에는 부가 정보만 남김
             incident_metadata={
-                "attack_mapping": result.attack_mapping,
                 "hil_required": result.hil_required,
+                "raw_response": getattr(result, "raw_response", ""),
             },
         )
         db.add(inc)
 
-        # 자동 대응 Job 생성 (승인된 경우)
+        # 자동 대응 Job 생성
         if result.status == "approved":
             job = Job(
                 client_id=item["meta"]["client_id"],

@@ -2,10 +2,10 @@
 set -euo pipefail
 
 #
-# lastagent 설치 스크립트 (최종)
+# lastagent 설치 스크립트 (서비스 파일 수정 없이 설치)
 #  - otel-agent + secure-forwarder + agent-controller 설치
 #  - .env 자동 생성 (/auth/register 호출)
-#  - 이미 설치된 systemd 유닛은 덮어쓰지 않음
+#  - 필요한 버퍼 디렉토리(otel_storage) 자동 생성
 #
 
 # ───────────── 기본 설정 ─────────────
@@ -30,8 +30,8 @@ REGISTER_URL="${CONTROLLER_URL}${REGISTER_PATH}"
 CLIENT_ID="default"
 AGENT_VERSION="1"
 
-# 🔑 Registration Key (웹 콘솔에서 5분짜리 키 복사해서 넣어야 함)
-BOOTSTRAP_SECRET="${BOOTSTRAP_SECRET:?환경변수 BOOTSTRAP_SECRET 에 Registration Key 를 넣고 실행하세요}"
+# [입력 확인] 웹 콘솔에서 키를 확인하고 실행 시 환경변수로 주입해야 함
+BOOTSTRAP_SECRET=""
 
 # ───────────── Helper 함수 ─────────────
 
@@ -63,7 +63,11 @@ fi
 mkdir -p "${REPO_DIR}" "${ETC_DIR}" "${REPO_DIR}/venv"
 mkdir -p "${AGENT_HOME}/remote.d"
 mkdir -p /var/lib/otelcol-contrib
-mkdir -p /var/lib/secure-log-agent/queue
+
+# [수정] 서비스 파일 수정 없이 동작하도록 여기서 디렉토리 생성
+# agent.yaml 에서 사용하는 경로를 미리 생성합니다.
+log "버퍼 디렉토리 생성: /var/lib/secure-log-agent/otel_storage"
+mkdir -p /var/lib/secure-log-agent/otel_storage
 
 # 시스템 계정 생성
 if ! id -u "${AGENT_USER}" >/dev/null 2>&1; then
@@ -113,7 +117,6 @@ EOF
 )
 
   log "▶ POST ${REGISTER_URL}"
-  log "[*] payload: ${JSON_PAYLOAD}"
 
   RESPONSE=$(
     curl -sS -w "\n%{http_code}" -X POST "${REGISTER_URL}" \
@@ -128,20 +131,22 @@ EOF
   HTTP_STATUS=$(echo "${RESPONSE}" | tail -n1)
   BODY=$(echo "${RESPONSE}" | sed '$d')
 
-  if [[ "${HTTP_STATUS}" != "200" ]]; then
+  if [[ "${HTTP_STATUS}" != "200" && "${HTTP_STATUS}" != "201" ]]; then
     error "HTTP status: ${HTTP_STATUS}"
     error "서버 응답: ${BODY}"
-    error "/auth/register 요청 실패"
+    error "/auth/register 요청 실패 (키가 만료되었거나 서버 주소가 틀렸을 수 있습니다)"
     exit 1
   fi
 
-  log "[*] HTTP status: ${HTTP_STATUS}"
-  log "[*] response body: ${BODY}"
+  log "[*] 등록 성공! HTTP status: ${HTTP_STATUS}"
 
   TOKEN=$(echo "${BODY}"         | jq -r '.access_token // empty')
   AGENT_ID=$(echo "${BODY}"      | jq -r '.agent_id // empty')
   REFRESH_TOKEN=$(echo "${BODY}" | jq -r '.refresh_token // empty')
   EXPIRES_IN=$(echo "${BODY}"    | jq -r '.expires_in // 3600')
+
+  # 로컬 통신용 랜덤 토큰 생성
+  LOCAL_TOKEN_VAL=$(python3 -c "import secrets; print(secrets.token_hex(16))")
 
   if [[ -z "${TOKEN}" || "${TOKEN}" == "null" ]]; then
     error "access_token 파싱 실패. 응답: ${BODY}"
@@ -152,21 +157,28 @@ EOF
   cat <<EOF > "${ENV_FILE}"
 # lastagent 자동 생성 환경파일
 
-# agent-controller 용
-CONTROLLER_URL=${CONTROLLER_URL}
+# [Identity]
 CLIENT_ID=${CLIENT_ID}
 AGENT_ID=${AGENT_ID}
+
+# [Authentication]
 AGENT_TOKEN=${TOKEN}
 AGENT_REFRESH_TOKEN=${REFRESH_TOKEN}
 AGENT_TOKEN_EXPIRES_IN=${EXPIRES_IN}
-
-# secure-forwarder 용
-UPSTREAM_URL=http://${CONTROLLER_HOST}:30080/ingest/logs
-UPSTREAM_LOG_TOKEN=dev_log_token
 HMAC_SECRET=super_secret_hmac_key
-LOCAL_TOKEN=dev_agent_token
+
+# [Connection]
+CONTROLLER_URL=http://${CONTROLLER_HOST}:${CONTROLLER_PORT}
+UPSTREAM_URL=http://${CONTROLLER_HOST}:${CONTROLLER_PORT}/ingest/logs
+UPSTREAM_LOG_TOKEN=${TOKEN} 
+POLL_INTERVAL=5
+
+# [Local Communication]
 LISTEN_HOST=127.0.0.1
 LISTEN_PORT=19000
+LOCAL_TOKEN=${LOCAL_TOKEN_VAL}
+INGEST_ENDPOINT=http://127.0.0.1:19000
+INGEST_TOKEN=${LOCAL_TOKEN_VAL}
 EOF
 
   chmod 600 "${ENV_FILE}"
@@ -182,6 +194,8 @@ fi
 
 cp "${ETC_DIR}/agent.yaml" "${AGENT_HOME}/agent.yaml"
 
+# [중요] 권한 설정: otel-agent가 otel_storage에 쓸 수 있도록 소유권 변경
+log "권한 설정 적용..."
 chown -R "${AGENT_USER}:nogroup" \
   "${AGENT_HOME}" \
   /var/lib/otelcol-contrib \
@@ -209,15 +223,14 @@ systemctl enable otel-agent.service
 systemctl enable secure-forwarder.service
 systemctl enable agent-controller.service
 
+log "서비스 재시작 중..."
 systemctl restart otel-agent.service
 systemctl restart secure-forwarder.service
 systemctl restart agent-controller.service
 
 echo
 log "서비스 상태 요약:"
-systemctl --no-pager --full status otel-agent.service       | sed -n '1,8p'
-systemctl --no-pager --full status secure-forwarder.service | sed -n '1,8p'
-systemctl --no-pager --full status agent-controller.service | sed -n '1,8p'
+systemctl --no-pager status otel-agent.service secure-forwarder.service agent-controller.service | grep "Active:"
 
 echo
-log "설치 완료. 서비스 실행 중입니다."
+log "설치 완료. 에이전트가 실행 중입니다."

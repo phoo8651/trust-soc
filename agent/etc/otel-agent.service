@@ -6,31 +6,30 @@ Wants=network-online.target
 [Service]
 Type=simple
 
-# 일단 동작 우선: root 계정으로 실행
-User=root
-Group=root
-# 나중에 하드닝하고 싶으면 아래 두 줄을 쓰고 위를 주석 처리:
-#User=otel-agent
-#Group=nogroup
+# otel-agent 전용 계정 사용
+User=otel-agent
+Group=nogroup
 
 WorkingDirectory=/etc/secure-log-agent
-
 EnvironmentFile=/home/last/lastagent/etc/.env
 
+# [수정] root 권한으로 새 버퍼 디렉토리(otel_storage) 생성 및 권한 부여
 PermissionsStartOnly=true
-ExecStartPre=/usr/bin/mkdir -p /var/lib/secure-log-agent/queue /var/lib/otelcol-contrib
-ExecStartPre=/usr/bin/chown -R root:root /etc/secure-log-agent /var/lib/secure-log-agent /var/lib/otelcol-contrib
+ExecStartPre=/usr/bin/mkdir -p /var/lib/secure-log-agent/otel_storage /var/lib/otelcol-contrib
+ExecStartPre=/usr/bin/chown -R otel-agent:nogroup /etc/secure-log-agent /var/lib/secure-log-agent /var/lib/otelcol-contrib
 
+# 실행
 ExecStart=/usr/local/bin/otelcol-contrib \
   --config=/etc/secure-log-agent/agent.yaml
 
 Restart=always
 RestartSec=5
 
+########## Hardening ##########
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ProtectHome=true
+# ProtectHome=true # 홈 디렉토리 내 .env 읽어야 하므로 주석 처리 또는 false
 ProtectControlGroups=true
 ProtectKernelLogs=true
 ProtectKernelModules=true
@@ -40,6 +39,7 @@ RestrictNamespaces=true
 LockPersonality=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
+# 쓰기 권한 허용 경로
 ReadWritePaths=/etc/secure-log-agent
 ReadWritePaths=/var/lib/otelcol-contrib
 ReadWritePaths=/var/log

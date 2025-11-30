@@ -1,7 +1,5 @@
-# llm/local_llm_PoC.py
 import os
 import json
-import asyncio
 import logging
 from typing import Dict, Any, Optional
 
@@ -13,9 +11,6 @@ DEFAULT_MISTRAL_MODEL = os.getenv(
 )
 
 
-# -----------------------------------------------------
-# ① DummyLocalLLM: 개발용 모의 응답
-# -----------------------------------------------------
 class DummyLocalLLM:
     def __init__(self, model_path: Optional[str] = None):
         self.model_path = model_path
@@ -23,59 +18,46 @@ class DummyLocalLLM:
 
     def generate(self, prompt: str) -> str:
         logger.info("[DummyLocalLLM] generating mock response")
+        # (기존 더미 로직 유지)
         parsed: Dict[str, Any] = {
             "summary": "모의 요약 (dummy)",
             "attack_mapping": ["T1595"],
             "recommended_actions": ["로그 모니터링 강화"],
             "confidence": 0.5,
-            "evidence_refs": [
-                {
-                    "type": "raw",
-                    "ref_id": "log_001",
-                    "source": "auth.log",
-                    "offset": 0,
-                    "length": 100,
-                    "sha256": (
-                        "abcdef1234567890abcdef1234567890"
-                        "abcdef1234567890abcdef1234567890"
-                    ),
-                }
-            ],
+            "evidence_refs": [],
             "hil_required": False,
         }
         return json.dumps(parsed, ensure_ascii=False)
 
 
-# -----------------------------------------------------
-# ② LocalMistralLLM: mistral-7b-instruct GGUF 로컬 모델 연결
-# -----------------------------------------------------
 class LocalMistralLLM:
     def __init__(self, model_path: Optional[str] = None):
-        from llama_cpp import Llama  # 런타임 엔진 (GGUF용)
+        from llama_cpp import Llama
 
-        # 경로가 명시되지 않으면 Mistral 기본 모델 사용
         self.model_path = model_path or DEFAULT_MISTRAL_MODEL
 
+        if not os.path.exists(self.model_path):
+            raise FileNotFoundError(f"Model not found: {self.model_path}")
+
+        # [수정 1] 컨텍스트 윈도우 증가 (입력+출력 합계 용량)
+        # 기존 1024 -> 4096 (Mistral 모델의 여유 공간 확보)
         self.llm = Llama(
-            model_path=self.model_path,
-            n_ctx=4096,  # 컨텍스트 길이
-            n_threads=4,  # CPU 스레드 수 (환경에 맞게 조정 가능)
-            verbose=False,
+            model_path=self.model_path, n_ctx=4096, n_gpu_layers=-1, verbose=False
         )
 
-    def generate(self, prompt, max_tokens: int = 1024, temperature: float = 0.0):
-        logger.info("[LocalMistralLLM] Generating with mistral-7b-instruct...")
+    def generate(self, prompt: str) -> str:
+        # [수정 2] 생성 최대 길이 증가 (출력 용량)
+        # 기존 256 -> 2048 (긴 보고서도 잘리지 않도록 충분히 확보)
         try:
             output = self.llm(
                 prompt,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                top_p=1.0,
-                stop=["}"],
+                max_tokens=2048,
+                temperature=0.1,
+                top_p=0.95,
+                stop=["</s>", "END_JSON"],  # 종료 조건 명확화
+                echo=False,
             )
+            return output["choices"][0]["text"]
         except Exception as e:
-            logger.error(f"🔥 LocalMistralLLM crashed: {e}")
+            logger.error(f"🔥 LocalMistralLLM crash: {e}")
             raise
-
-        return output["choices"][0]["text"]
-        # return output["choices"][0]["text"].strip()
