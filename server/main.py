@@ -31,6 +31,7 @@ from app.api import ingest, auth, llm_router  # llm_router 추가
 from app.controllers.detect_controller import DetectController
 from app.controllers.llm_controller import LLMController
 from app.services.advisor_service import AdvisorService
+from app.core.bootstrap import BootstrapManager
 from app.api import console
 
 
@@ -48,16 +49,15 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
 # 4. Lifespan (초기화 및 종료)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # DB 초기화
     print("🛠️  Initializing Database...")
     init_db()
 
-    # LLM Advisor RAG 문서 로드
-    print("📚 Initializing LLM Knowledge Base...")
-    # AdvisorService 인스턴스를 만들면 내부적으로 RAG/모델 로드됨
+    print("🔐 Starting Bootstrap Secret Rotation...")
+    BootstrapManager.start()  # [New] 키 갱신 시작
+
+    print("📚 Initializing LLM Advisor...")
     _ = AdvisorService()
 
-    # 백그라운드 컨트롤러 시작
     print("🚀 Starting Background Controllers...")
     detect_ctrl = DetectController()
     llm_ctrl = LLMController()
@@ -67,9 +67,10 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    print("🛑 Shutting down controllers...")
+    print("🛑 Shutting down...")
     task1.cancel()
     task2.cancel()
+    BootstrapManager.stop()
 
 
 # 5. 앱 정의

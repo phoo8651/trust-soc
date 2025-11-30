@@ -2,6 +2,7 @@ from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from sqlalchemy import inspect
+from app.core.bootstrap import BootstrapManager
 from pathlib import Path
 import json
 
@@ -48,6 +49,8 @@ async def dashboard(request: Request, db: Session = Depends(get_db)):
     recents = db.query(Incident).order_by(Incident.created_at.desc()).limit(5).all()
     jobs = db.query(Job).order_by(Job.created_at.desc()).limit(5).all()
 
+    current_secret = BootstrapManager.get_current_secret()
+
     return templates.TemplateResponse(
         "dashboard.html",
         {
@@ -58,6 +61,7 @@ async def dashboard(request: Request, db: Session = Depends(get_db)):
                 "incidents": total_incidents,
                 "pending": pending,
             },
+            "bootstrap_secret": current_secret,
             "incidents": recents,
             "jobs": jobs,
         },
