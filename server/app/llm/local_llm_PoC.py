@@ -1,4 +1,4 @@
-#llm/local_llm_PoC.py
+# llm/local_llm_PoC.py
 import os
 import json
 import asyncio
@@ -8,9 +8,10 @@ from typing import Dict, Any, Optional
 logger = logging.getLogger(__name__)
 
 DEFAULT_MISTRAL_MODEL = os.getenv(
-  "LOCAL_MODEL",
-  os.path.join("llm", "models", "mistral-7b-instruct-v0.2.Q4_K_M.gguf"),
+    "LOCAL_MODEL",
+    os.path.join("llm", "models", "mistral-7b-instruct-v0.2.Q4_K_M.gguf"),
 )
+
 
 # -----------------------------------------------------
 # ① DummyLocalLLM: 개발용 모의 응답
@@ -57,12 +58,12 @@ class LocalMistralLLM:
 
         self.llm = Llama(
             model_path=self.model_path,
-            n_ctx=1024,   # 컨텍스트 길이
+            n_ctx=4096,  # 컨텍스트 길이
             n_threads=4,  # CPU 스레드 수 (환경에 맞게 조정 가능)
-            verbose=False
+            verbose=False,
         )
 
-    def generate(self, prompt, max_tokens: int = 256, temperature: float = 0.0):
+    def generate(self, prompt, max_tokens: int = 1024, temperature: float = 0.0):
         logger.info("[LocalMistralLLM] Generating with mistral-7b-instruct...")
         try:
             output = self.llm(
@@ -75,8 +76,6 @@ class LocalMistralLLM:
         except Exception as e:
             logger.error(f"🔥 LocalMistralLLM crashed: {e}")
             raise
-        
+
         return output["choices"][0]["text"]
-        #return output["choices"][0]["text"].strip()
-
-
+        # return output["choices"][0]["text"].strip()

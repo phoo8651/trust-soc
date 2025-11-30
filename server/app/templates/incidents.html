@@ -1,47 +1,109 @@
-<thead>
-    <tr>
-        <th>ID</th>
-        <th>Time</th>
-        <th>Client</th>
-        <th>Summary</th>
-        <th>Rec. Actions</th>
-        <th>Status</th>
-        <th>Report</th>
-    </tr>
-</thead>
+{% extends "base.html" %}
 
-<tbody>
-    {% for inc in incidents %}
-    <tr>
-        <td><small class="text-muted">{{ inc.incident_id.split('-')[-1] }}</small></td>
-        <td>{{ inc.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
-        <td>{{ inc.client_id }}</td>
-        <td>{{ inc.summary }}</td>
-        <td>
-            {% if inc.recommended_actions %}
-            {% for act in inc.recommended_actions %}
-            <span class="badge bg-light text-dark border">{{ act.action if act.action else act }}</span>
-            {% endfor %}
-            {% else %}
-            <span class="text-muted">-</span>
-            {% endif %}
-        </td>
-        <td>
-            {{ inc.status }}
-        </td>
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h2 class="fw-bold text-dark mb-0">Incident History</h2>
+        <p class="text-muted mb-0">보안 사고 탐지 및 조치 이력</p>
+    </div>
+    <div class="d-flex gap-2">
+        <button class="btn btn-outline-secondary" onclick="location.reload()">
+            <i class="bi bi-arrow-clockwise"></i> Refresh
+        </button>
+    </div>
+</div>
 
-        <td>
-            <a href="/console/incidents/{{ inc.incident_id }}/pdf" class="btn btn-sm btn-outline-danger"
-                title="Download PDF">
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor"
-                    class="bi bi-file-earmark-pdf" viewBox="0 0 16 16">
-                    <path
-                        d="M14 14V4.5L9.5 0H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2zM9.5 3A1.5 1.5 0 0 0 11 4.5h2V14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1h5.5v2z" />
-                    <path
-                        d="M4.603 14.087a.81.81 0 0 1-.438-.42c-.195-.388-.13-.776.08-1.102.198-.307.526-.568.897-.787a7.68 7.68 0 0 1 1.482-.645 19.697 19.697 0 0 0 1.062-2.227 7.269 7.269 0 0 1-.43-1.295c-.086-.4-.119-.796-.046-1.136.075-.354.274-.672.65-.823.192-.077.4-.12.602-.077a.7.7 0 0 1 .477.365c.088.164.12.356.127.538.007.188-.012.396-.047.614-.084.51-.27 1.134-.52 1.794a10.954 10.954 0 0 0 .98 1.686 5.753 5.753 0 0 1 1.334.05c.364.066.734.195.96.465.12.144.193.32.2.518.007.192-.047.382-.138.563a1.04 1.04 0 0 1-.354.416.856.856 0 0 1-.51.138c-.331-.014-.654-.196-.933-.417a5.712 5.712 0 0 1-.911-.95 11.651 11.651 0 0 0-1.997.406 11.307 11.307 0 0 1-1.02 1.51c-.292.35-.609.656-.927.787a.793.793 0 0 1-.58.029zm1.379-1.901c-.166.076-.32.156-.459.238-.328.194-.541.383-.647.545-.094.148-.096.35.04.535.071.096.163.152.261.168.175.027.352-.06.529-.214.27-.232.535-.55.729-.828.093-.133.186-.277.28-.427l-.733-.013z" />
-                </svg>
-            </a>
-        </td>
-    </tr>
-    {% endfor %}
-</tbody>
+<div class="card shadow-sm border-0">
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0" style="font-size: 0.95rem;">
+                <thead class="table-light text-secondary text-uppercase"
+                    style="font-size: 0.85rem; letter-spacing: 0.5px;">
+                    <tr>
+                        <th class="py-3 ps-4">ID / Time</th>
+                        <th class="py-3">Client</th>
+                        <th class="py-3">Summary</th>
+                        <th class="py-3">Rec. Actions</th>
+                        <th class="py-3 text-center">Status</th>
+                        <th class="py-3 text-center">Report</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for inc in incidents %}
+                    <tr>
+                        <td class="ps-4">
+                            <div class="fw-bold text-dark">#{{ inc.incident_id.split('-')[-1] }}</div>
+                            <div class="text-muted small">{{ inc.created_at.strftime('%Y-%m-%d %H:%M') }}</div>
+                        </td>
+
+                        <td>
+                            <span class="badge bg-light text-dark border">{{ inc.client_id }}</span>
+                        </td>
+
+                        <td style="max-width: 300px;">
+                            <div class="text-truncate" title="{{ inc.summary }}">
+                                {{ inc.summary }}
+                            </div>
+                        </td>
+
+                        <td>
+                            {% if inc.recommended_actions %}
+                            <div class="d-flex flex-wrap gap-1">
+                                {% for act in inc.recommended_actions %}
+                                <span
+                                    class="badge bg-secondary bg-opacity-10 text-secondary border border-secondary border-opacity-10">
+                                    {{ act.action if act.action else act }}
+                                </span>
+                                {% endfor %}
+                            </div>
+                            {% else %}
+                            <span class="text-muted small">-</span>
+                            {% endif %}
+                        </td>
+
+                        <td class="text-center">
+                            {% if inc.status == 'approved' %}
+                            <span
+                                class="badge bg-success-subtle text-success border border-success-subtle rounded-pill px-3">Approved</span>
+                            {% elif inc.status == 'rejected' %}
+                            <span
+                                class="badge bg-danger-subtle text-danger border border-danger-subtle rounded-pill px-3">Rejected</span>
+                            {% elif inc.status == 'pending_approval' %}
+                            <span
+                                class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle rounded-pill px-3">Pending</span>
+                            {% else %}
+                            <span
+                                class="badge bg-info-subtle text-info-emphasis border border-info-subtle rounded-pill px-3">{{
+                                inc.status }}</span>
+                            {% endif %}
+                        </td>
+
+                        <td class="text-center">
+                            <a href="/console/incidents/{{ inc.incident_id }}/pdf"
+                                class="btn btn-sm btn-outline-danger border-0" title="Download Report">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor"
+                                    class="bi bi-file-earmark-pdf-fill" viewBox="0 0 16 16">
+                                    <path
+                                        d="M5.523 12.424c.14-.082.293-.162.459-.238a7.878 7.878 0 0 1-.45.606c-.28.337-.498.516-.635.572a.266.266 0 0 1-.035.012.282.282 0 0 1-.026-.044c-.056-.11-.054-.216.04-.36.106-.165.319-.354.647-.548zm2.455-1.647c-.119.025-.237.05-.356.078a21.148 21.148 0 0 0 .5-1.05 12.045 12.045 0 0 0 .51.973c-.22.015-.464.015-.654-.001zm2.525.939a3.881 3.881 0 0 1-.435-.41c.228.005.434.022.612.054.317.057.466.147.518.209a.095.095 0 0 1 .026.064.436.436 0 0 1-.06.2.307.307 0 0 1-.094.124.107.107 0 0 1-.069.015c-.09-.003-.258-.066-.498-.256zM8.278 6.97c-.04.244-.108.524-.2.829a4.86 4.86 0 0 1-.089-.346c-.076-.353-.087-.63-.046-.822.038-.177.11-.248.196-.283a.517.517 0 0 1 .145-.04c.013.03.028.092.032.198.005.122-.007.277-.038.465z" />
+                                    <path fill-rule="evenodd"
+                                        d="M4 0h5.293A1 1 0 0 1 10 .293L13.707 4a1 1 0 0 1 .293.707V14a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V2a2 2 0 0 1 2-2zm5.5 1.5v2a1 1 0 0 0 1 1h2l-3-3zM4.165 13.668c.09.18.23.343.438.419.207.075.412.04.58-.03.318-.13.635-.436.926-.786.333-.401.683-.927 1.021-1.51a11.651 11.651 0 0 1 1.997-.406c.342.38.637.7.893.953.264.253.544.468.787.57.25.105.549.106.758.053.226-.057.394-.236.425-.49a.767.767 0 0 0-.052-.375c-.058-.12-.137-.216-.234-.282-.26-.179-.624-.199-.956-.16a7.228 7.228 0 0 0-1.21.215 11.758 11.758 0 0 1-1.921-.497c-.356-.867-.677-1.935-.853-2.92a23.114 23.114 0 0 1-.462-2.122c.264-.533.425-1.003.467-1.42.043-.431-.035-.853-.298-1.124-.275-.282-.676-.328-1.028-.278-.23.033-.42.135-.53.298-.12.179-.17.436-.122.812.07.546.29 1.13.57 1.693-.243.628-.54 1.436-.93 2.372-.432 1.034-.943 2.164-1.492 3.194-.28.067-.665.176-1.077.318-.521.18-1.013.388-1.22.562-.163.136-.251.29-.268.423-.016.12.036.27.142.398a.573.573 0 0 0 .28.156zm1.379-1.901c-.166.076-.32.156-.459.238-.328.194-.541.383-.647.545-.094.148-.096.35.04.535.071.096.163.152.261.168.175.027.352-.06.529-.214.27-.232.535-.55.729-.828.093-.133.186-.277.28-.427l-.733-.013z" />
+                                </svg>
+                            </a>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="6" class="text-center py-5">
+                            <div class="text-muted mb-2">
+                                <i class="bi bi-shield-check" style="font-size: 2rem;"></i>
+                            </div>
+                            <p class="mb-0">No incidents found.</p>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
