@@ -2,16 +2,13 @@
 set -euo pipefail
 
 #
-# lastagent 설치 / 등록 스크립트 (최종)
-#
-# - .env 없으면 /auth/register 로 에이전트 등록
-# - 응답 토큰으로 /home/last/lastagent/etc/.env 생성
-# - otel-agent / secure-forwarder / agent-controller 서비스 설치 및 시작
+# lastagent 설치 스크립트 (최종)
+#  - otel-agent + secure-forwarder + agent-controller 설치
+#  - .env 자동 생성 (/auth/register 호출)
+#  - 이미 설치된 systemd 유닛은 덮어쓰지 않음
 #
 
-########################################
-# 0. 기본 경로/계정 설정
-########################################
+# ───────────── 기본 설정 ─────────────
 
 LAST_USER="last"
 REPO_DIR="/home/${LAST_USER}/lastagent"
@@ -22,37 +19,21 @@ AGENT_HOME="/etc/secure-log-agent"
 ETC_DIR="${REPO_DIR}/etc"
 SYSTEMD_DIR="/etc/systemd/system"
 
-########################################
-# 1. 솔루션 서버 & 에이전트 메타 정보
-########################################
-
-# 솔루션 서버(NodePort 기준)
+# 솔루션 서버 정보 (NodePort 30080 사용)
 CONTROLLER_HOST="192.168.67.131"
 CONTROLLER_PORT="30080"
 CONTROLLER_URL="http://${CONTROLLER_HOST}:${CONTROLLER_PORT}"
 
-# 에이전트 등록 API
 REGISTER_PATH="/auth/register"
 REGISTER_URL="${CONTROLLER_URL}${REGISTER_PATH}"
 
-# 로그 인게스트 API
-INGEST_PATH="/ingest/logs"
-INGEST_URL="${CONTROLLER_URL}${INGEST_PATH}"
-
-# 에이전트 메타 정보
 CLIENT_ID="default"
-AGENT_VERSION="1"         # 서버 스키마상 string
-BOOTSTRAP_SECRET="dev"    # secret_proof 로 사용 (서버와 합의된 값)
+AGENT_VERSION="1"
 
-# forwarder 기본 설정
-LOCAL_TOKEN="dev_agent_token"
-HMAC_SECRET="super_secret_hmac_key"
-LISTEN_HOST="127.0.0.1"
-LISTEN_PORT="19000"
+# 🔑 Registration Key (웹 콘솔에서 5분짜리 키 복사해서 넣어야 함)
+BOOTSTRAP_SECRET="${BOOTSTRAP_SECRET:?환경변수 BOOTSTRAP_SECRET 에 Registration Key 를 넣고 실행하세요}"
 
-########################################
-# 2. Helper 함수
-########################################
+# ───────────── Helper 함수 ─────────────
 
 log()   { echo "[*] $*"; }
 error() { echo "[ERROR] $*" >&2; }
@@ -62,27 +43,23 @@ install_service_unit() {
   local dst="$2"
   local name="$3"
 
-  if [[ -f "${dst}" ]]; then
+  if [[ -f "$dst" ]]; then
     log "${name} service 이미 존재 → 덮어쓰지 않습니다: ${dst}"
   else
     log "${name} service 신규 설치 → ${dst}"
-    cp "${src}" "${dst}"
+    cp "$src" "$dst"
   fi
 }
 
-########################################
-# 3. 설치 준비
-########################################
+# ───────────── 설치 시작 ─────────────
 
 log "agent 설치 시작"
 
-# root 권한 확인
 if [[ "${EUID}" -ne 0 ]]; then
-  error "root 권한이 필요합니다. sudo 로 실행하세요."
+  error "root 권한이 필요합니다. sudo로 실행하세요."
   exit 1
 fi
 
-# 디렉터리 준비
 mkdir -p "${REPO_DIR}" "${ETC_DIR}" "${REPO_DIR}/venv"
 mkdir -p "${AGENT_HOME}/remote.d"
 mkdir -p /var/lib/otelcol-contrib
@@ -97,41 +74,38 @@ if ! id -u "${AGENT_USER}" >/dev/null 2>&1; then
     "${AGENT_USER}"
 fi
 
-# 패키지 설치
+# 필수 패키지 설치
 apt-get update
 apt-get install -y python3 python3-venv curl jq
 
-# venv 설정
+# Python venv
 if [[ ! -d "${REPO_DIR}/venv" ]]; then
   log "Python venv 생성: ${REPO_DIR}/venv"
   python3 -m venv "${REPO_DIR}/venv"
 fi
 
+# venv 안에 필요한 패키지 설치
 source "${REPO_DIR}/venv/bin/activate"
 pip install --upgrade pip
 pip install requests PyYAML python-dotenv
 deactivate
 
-########################################
-# 4. /auth/register 로 에이전트 등록 → .env 생성
-########################################
+# ───────────── .env 생성 (/auth/register) ─────────────
 
-if [[ -f "${ETC_DIR}/.env" ]]; then
-  log "기존 .env 파일이 있습니다 → 재사용: ${ETC_DIR}/.env"
+ENV_FILE="${ETC_DIR}/.env"
+
+if [[ -f "${ENV_FILE}" ]]; then
+  log "기존 .env 파일 있음 → 재사용합니다: ${ENV_FILE}"
 else
-  log ".env 없음 → 서버에 /auth/register 로 agent 등록 시도..."
+  log ".env 파일 없음 → 서버 /auth/register 로 agent 등록 시도..."
 
-  # host 값: 가능하면 IP, 없으면 hostname
-  HOST_VALUE=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
-  if [[ -z "${HOST_VALUE}" ]]; then
-    HOST_VALUE="$(hostname)"
-  fi
+  HOSTNAME_VALUE="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  [[ -z "${HOSTNAME_VALUE}" ]] && HOSTNAME_VALUE="$(hostname)"
 
-  # 서버 문서 기준 필드: client_id, host, agent_version, secret_proof
   JSON_PAYLOAD=$(cat <<EOF
 {
   "client_id": "${CLIENT_ID}",
-  "host": "${HOST_VALUE}",
+  "host": "${HOSTNAME_VALUE}",
   "agent_version": "${AGENT_VERSION}",
   "secret_proof": "${BOOTSTRAP_SECRET}"
 }
@@ -139,75 +113,68 @@ EOF
 )
 
   log "▶ POST ${REGISTER_URL}"
-  log "  payload: ${JSON_PAYLOAD}"
+  log "[*] payload: ${JSON_PAYLOAD}"
 
-  # 바디 + HTTP 코드 함께 받기
-  RAW_RESPONSE=$(curl -sS -X POST "${REGISTER_URL}" \
-    -H "Content-Type: application/json" \
-    -d "${JSON_PAYLOAD}" \
-    -w "HTTPSTATUS:%{http_code}" ) || {
-      error "curl 요청 실패. 서버/포트/방화벽을 확인하세요. (${REGISTER_URL})"
-      exit 1
-    }
+  RESPONSE=$(
+    curl -sS -w "\n%{http_code}" -X POST "${REGISTER_URL}" \
+      -H "Content-Type: application/json" \
+      -d "${JSON_PAYLOAD}"
+  ) || {
+    error "/auth/register 요청 자체가 실패했습니다."
+    exit 1
+  }
 
-  HTTP_STATUS="${RAW_RESPONSE##*HTTPSTATUS:}"
-  RESP_BODY="${RAW_RESPONSE%HTTPSTATUS:*}"
+  # 마지막 줄은 HTTP status code, 위는 body
+  HTTP_STATUS=$(echo "${RESPONSE}" | tail -n1)
+  BODY=$(echo "${RESPONSE}" | sed '$d')
 
-  log "  HTTP status: ${HTTP_STATUS}"
-  log "  response body: ${RESP_BODY}"
-
-  if [[ "${HTTP_STATUS}" != "200" && "${HTTP_STATUS}" != "201" ]]; then
-    error "/auth/register 실패 (HTTP ${HTTP_STATUS})"
-    error "서버 응답: ${RESP_BODY}"
+  if [[ "${HTTP_STATUS}" != "200" ]]; then
+    error "HTTP status: ${HTTP_STATUS}"
+    error "서버 응답: ${BODY}"
+    error "/auth/register 요청 실패"
     exit 1
   fi
 
-  # 응답에서 토큰/ID 파싱
-  AGENT_ID=$(echo "${RESP_BODY}"    | jq -r '.agent_id      // empty')
-  ACCESS_TOKEN=$(echo "${RESP_BODY}"| jq -r '.access_token  // empty')
-  REFRESH_TOKEN=$(echo "${RESP_BODY}" | jq -r '.refresh_token // empty')
-  EXPIRES_IN=$(echo "${RESP_BODY}"  | jq -r '.expires_in    // 3600')
+  log "[*] HTTP status: ${HTTP_STATUS}"
+  log "[*] response body: ${BODY}"
 
-  if [[ -z "${AGENT_ID}" || -z "${ACCESS_TOKEN}" || "${AGENT_ID}" == "null" || "${ACCESS_TOKEN}" == "null" ]]; then
-    error "서버 응답에서 agent_id / access_token 을 파싱하지 못했습니다."
-    error "응답: ${RESP_BODY}"
+  TOKEN=$(echo "${BODY}"         | jq -r '.access_token // empty')
+  AGENT_ID=$(echo "${BODY}"      | jq -r '.agent_id // empty')
+  REFRESH_TOKEN=$(echo "${BODY}" | jq -r '.refresh_token // empty')
+  EXPIRES_IN=$(echo "${BODY}"    | jq -r '.expires_in // 3600')
+
+  if [[ -z "${TOKEN}" || "${TOKEN}" == "null" ]]; then
+    error "access_token 파싱 실패. 응답: ${BODY}"
     exit 1
   fi
 
-  log "등록 성공: agent_id=${AGENT_ID}"
+  # .env 생성
+  cat <<EOF > "${ENV_FILE}"
+# lastagent 자동 생성 환경파일
 
-  # .env 생성 (agent-controller + secure-forwarder 공용)
-  cat <<EOF > "${ETC_DIR}/.env"
-# lastagent 자동 생성 .env
-
-# 공용 메타 정보
-CLIENT_ID=${CLIENT_ID}
-
-# agent-controller 설정
+# agent-controller 용
 CONTROLLER_URL=${CONTROLLER_URL}
+CLIENT_ID=${CLIENT_ID}
 AGENT_ID=${AGENT_ID}
-AGENT_TOKEN=${ACCESS_TOKEN}
+AGENT_TOKEN=${TOKEN}
 AGENT_REFRESH_TOKEN=${REFRESH_TOKEN}
 AGENT_TOKEN_EXPIRES_IN=${EXPIRES_IN}
 
-# secure-forwarder 설정
-UPSTREAM_URL=${INGEST_URL}
-UPSTREAM_LOG_TOKEN=${ACCESS_TOKEN}   # ingest/logs Authorization 에 사용
-HMAC_SECRET=${HMAC_SECRET}
-LOCAL_TOKEN=${LOCAL_TOKEN}
-LISTEN_HOST=${LISTEN_HOST}
-LISTEN_PORT=${LISTEN_PORT}
+# secure-forwarder 용
+UPSTREAM_URL=http://${CONTROLLER_HOST}:30080/ingest/logs
+UPSTREAM_LOG_TOKEN=dev_log_token
+HMAC_SECRET=super_secret_hmac_key
+LOCAL_TOKEN=dev_agent_token
+LISTEN_HOST=127.0.0.1
+LISTEN_PORT=19000
 EOF
 
-  chmod 600 "${ETC_DIR}/.env"
-  chown root:root "${ETC_DIR}/.env"
-  log ".env 생성 완료 → ${ETC_DIR}/.env"
+  chmod 600 "${ENV_FILE}"
+  chown root:root "${ENV_FILE}"
+  log ".env 생성 완료 → ${ENV_FILE}"
 fi
 
-########################################
-# 5. agent.yaml 복사 및 권한 설정
-########################################
-
+# agent.yaml 확인 및 설치
 if [[ ! -f "${ETC_DIR}/agent.yaml" ]]; then
   error "agent.yaml 이 없습니다: ${ETC_DIR}/agent.yaml"
   exit 1
@@ -223,9 +190,7 @@ chown -R "${AGENT_USER}:nogroup" \
 chmod 750 "${AGENT_HOME}"
 chmod 640 "${AGENT_HOME}/agent.yaml"
 
-########################################
-# 6. systemd 유닛 설치
-########################################
+# ───────────── systemd 유닛 설치 ─────────────
 
 install_service_unit "${ETC_DIR}/otel-agent.service" \
   "${SYSTEMD_DIR}/otel-agent.service" \
@@ -238,10 +203,6 @@ install_service_unit "${REPO_DIR}/forwarder/secure-forwarder.service" \
 install_service_unit "${REPO_DIR}/agent/agent-controller.service" \
   "${SYSTEMD_DIR}/agent-controller.service" \
   "agent-controller"
-
-########################################
-# 7. 서비스 활성화 & 재시작
-########################################
 
 systemctl daemon-reload
 systemctl enable otel-agent.service
