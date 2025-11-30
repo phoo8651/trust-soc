@@ -32,7 +32,7 @@ from app.core.database import init_db
 from app.core.security import set_current_client
 
 # 2. [수정] 새로운 라우터 및 서비스 임포트
-from app.api import ingest, auth, llm_router, console
+from app.api import ingest, auth, llm_router, console, jobs
 from app.controllers.detect_controller import DetectController
 from app.controllers.llm_controller import LLMController
 from app.services.advisor_service import AdvisorService
@@ -110,6 +110,7 @@ async def general_exception_handler(request: Request, exc: Exception):
 # 라우터 등록
 app.include_router(auth.router)
 app.include_router(ingest.router)
+app.include_router(jobs.router)
 app.include_router(llm_router.router, prefix="/llm")
 app.include_router(console.router, prefix="/console")
 

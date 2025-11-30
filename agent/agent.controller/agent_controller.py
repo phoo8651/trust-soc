@@ -114,40 +114,29 @@ def make_signed_headers(method: str, path: str, body_bytes: bytes) -> Dict[str, 
 # 3. 명령 가져오기 (Polling)
 # ─────────────────────────────────────────────────────────────
 def fetch_commands() -> List[Dict[str, Any]]:
-    """
-    서버의 Job Queue에서 대기 중인 명령을 가져옵니다.
-    Endpoint: GET /agent/jobs/pull
-    """
+    # [수정] 서버의 jobs.py 라우터와 일치시킴
     path = "/agent/jobs/pull"
     url = f"{CONTROLLER_URL}{path}"
 
-    # GET 요청이므로 Body는 없음
+    # GET 요청 생성
     headers = make_signed_headers("GET", path, b"")
     params = {"agent_id": AGENT_ID}
 
     try:
         resp = requests.get(url, headers=headers, params=params, timeout=5)
     except Exception as e:
-        log(f"네트워크 오류 (fetch_commands): {e}")
+        log(f"Network error: {e}")
         return []
 
-    if resp.status_code == 204:  # No Content
+    if resp.status_code == 204:
         return []
 
     if resp.status_code != 200:
-        log(f"명령 조회 실패: status={resp.status_code}, body={resp.text[:100]}")
+        log(f"Pull failed: {resp.status_code} {resp.text[:100]}")
         return []
 
-    try:
-        data = resp.json()
-        # 서버 응답 구조: {"jobs": [...]}
-        cmds = data.get("jobs", [])
-        if cmds:
-            log(f"명령 {len(cmds)}개 수신됨.")
-        return cmds
-    except Exception as e:
-        log(f"JSON 파싱 오류: {e}")
-        return []
+    data = resp.json()
+    return data.get("jobs", [])
 
 
 # ─────────────────────────────────────────────────────────────
@@ -158,6 +147,7 @@ def ack_command(job_id: str, status: str, message: str = "") -> None:
     명령 수행 결과를 서버에 보고합니다.
     Endpoint: POST /agent/jobs/result
     """
+    # [수정] 서버의 jobs.py 라우터와 일치시킴
     path = "/agent/jobs/result"
     url = f"{CONTROLLER_URL}{path}"
 
