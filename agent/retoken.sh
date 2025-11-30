@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# lastagent 토큰 갱신(/auth/renew) 스크립트
+# 토큰 갱신 스크립트
 
 LAST_USER="last"
 REPO_DIR="/home/${LAST_USER}/lastagent"
