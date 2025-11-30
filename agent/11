@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+
+
+
+
+import os
+import json
+import time
+import hmac
+import hashlib
+import socket
+import sys
+from datetime import datetime, timezone
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
+
+import requests
+from dotenv import load_dotenv
+
+
+# ===== 1. 설정 로드 =====
+
+# agent .env 경로
+ENV_PATH = "/home/last/lastagent/etc/.env"
+load_dotenv(ENV_PATH)
+
+LISTEN_HOST = os.getenv("LISTEN_HOST", "127.0.0.1")
+LISTEN_PORT = int(os.getenv("LISTEN_PORT", "19000"))
+
+UPSTREAM_URL = os.getenv("UPSTREAM_URL")          # 예: http://192.168.67.131:30080/ingest/logs
+LOG_TOKEN    = os.getenv("UPSTREAM_LOG_TOKEN")    # ingest/logs용 토큰
+HMAC_SECRET  = os.getenv("HMAC_SECRET")           # 현재는 사용 안 함(옵션)
+
+CLIENT_ID = os.getenv("CLIENT_ID", "default")
+AGENT_ID  = os.getenv("AGENT_ID", "unknown")
+
+
+def log(msg: str) -> None:
+    """latin-1 인코딩 에러 방지용 로깅 함수"""
+    text = f"[FWD] {msg}"
+    try:
+        print(text, flush=True)
+    except UnicodeEncodeError:
+        # stdout 인코딩이 latin-1인 환경에서 한글/이모지 때문에 죽지 않도록 방어
+        data = (text + "\n").encode("utf-8", "replace")
+        sys.stdout.buffer.write(data)
+        sys.stdout.flush()
+
+
+# ===== 2. OTLP -> ingest/logs payload 변환 =====
+
+def transform_otlp(otlp_data: dict) -> dict | None:
+    """
+    OTLP/HTTP JSON (logs v1) 구조를 솔루션 서버의 ingest/logs 스키마로 변환.
+    변환 실패 또는 레코드가 없으면 None 반환.
+    """
+    records = []
+
+    try:
+        resource_logs = otlp_data.get("resourceLogs", [])
+        for rl in resource_logs:
+            for sl in rl.get("scopeLogs", []):
+                for lr in sl.get("logRecords", []):
+                    # 1) 타임스탬프 (나노초 -> ISO8601)
+                    ts_nano = lr.get("timeUnixNano")
+                    if ts_nano is None:
+                        ts_nano = time.time_ns()
+                    ts_iso = datetime.fromtimestamp(int(ts_nano) / 1e9, timezone.utc).isoformat()
+
+                    # 2) Log body 추출
+                    body = lr.get("body", {})
+                    if isinstance(body, dict):
+                        raw_msg = body.get("stringValue", str(body))
+                    else:
+                        raw_msg = str(body)
+
+                    record = {
+                        "ts": ts_iso,
+                        "source_type": "agent-filelog",
+                        "raw_line": raw_msg,
+                        "tags": ["otel"],
+                    }
+                    records.append(record)
+
+    except Exception as e:
+        log(f"Transform error: {e!r}")
+        return None
+
+    if not records:
+        return None
+
+    payload = {
+        "meta": {
+            "client_id": CLIENT_ID,
+            "host": socket.gethostname(),
+        },
+        "agent_id": AGENT_ID,
+        "records": records,
+    }
+    return payload
+
+
+# ===== 3. 솔루션 서버로 전송 =====
+
+def send_to_server(payload: dict) -> bool:
+    """
+    ingest/logs 엔드포인트로 JSON 전송.
+    - 헤더는 서버에서 알려준 형식에 맞춘다.
+    """
+    if not UPSTREAM_URL or not LOG_TOKEN:
+        log("UPSTREAM_URL 또는 LOG_TOKEN 이 설정되지 않았습니다.")
+        return False
+
+    body_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+    # 1) timestamp / nonce
+    ts = str(int(time.time()))   # 유닉스 타임(초)
+    nonce = str(time.time())
+
+    # 2) payload hash
+    payload_hash = hashlib.sha256(body_bytes).hexdigest()
+
+    # 3) 헤더 구성 (ingest/logs 요구사항)
+    headers = {
+        "Authorization": f"Bearer {LOG_TOKEN}",
+        "Content-Type": "application/json",
+        "X-Client-Id": CLIENT_ID,
+        "X-Request-Timestamp": ts,
+        "X-Payload-Hash": f"sha256:{payload_hash}",
+        "X-Nonce": nonce,
+        "X-Idempotency-Key": hashlib.md5((ts + nonce).encode()).hexdigest(),
+    }
+
+    # HMAC 서명이 진짜 필요하면 여기서 추가(현재 서버쪽에서 안 쓰면 생략 가능)
+    if HMAC_SECRET:
+        sig = hmac.new(
+            HMAC_SECRET.encode(),
+            (ts + payload_hash).encode(),
+            hashlib.sha256
+        ).hexdigest()
+        headers["X-Signature"] = sig
+
+    try:
+        resp = requests.post(UPSTREAM_URL, data=body_bytes, headers=headers, timeout=5)
+        log(f"Upstream response {resp.status_code}: {resp.text[:200]!r}")
+        return resp.status_code in (200, 202)
+    except Exception as e:
+        log(f"Upstream error: {e!r}")
+        return False
+
+
+# ===== 4. HTTP Server 핸들러 (로컬용) =====
+
+class RequestHandler(BaseHTTPRequestHandler):
+    """
+    - otel-agent 가 보내는 POST /v1/logs OTLP JSON을 받는다.
+    - 로컬 구간: 인증/암호화 없음, 그냥 JSON만 받는다.
+    """
+
+    def do_POST(self):
+        # 1) 경로 체크
+        if self.path != "/v1/logs":
+            self.send_response(404)
+            self.end_headers()
+            return
+
+        # 2) Body 읽기
+        try:
+            content_len = int(self.headers.get("Content-Length", 0))
+            raw_body = self.rfile.read(content_len) if content_len > 0 else b""
+            otlp_json = json.loads(raw_body.decode("utf-8"))
+        except Exception as e:
+            log(f"Bad request body: {e!r}")
+            self.send_response(400)
+            self.end_headers()
+            return
+
+        # 3) 변환
+        payload = transform_otlp(otlp_json)
+        if not payload:
+            # 변환할 레코드가 없으면 그냥 성공으로 응답
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"status":"empty"}')
+            return
+
+        # 4) 서버로 전송
+        ok = send_to_server(payload)
+
+        # otel-agent 입장에서는 전송 실패시 재시도하게 하려면 503을 돌려도 되고,
+        # 일단은 실패시 503, 성공시 200으로 나눠 준다.
+        if ok:
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"status":"ok"}')
+            log(f"Forwarded {len(payload['records'])} logs")
+        else:
+            self.send_response(503)
+            self.end_headers()
+            self.wfile.write(b'{"status":"upstream_error"}')
+
+    # noisy 로그 막고 싶으면 주석 해제
+    def log_message(self, format, *args):
+        # 기본 HTTP 서버 로그는 버리고, 우리가 정의한 log()만 사용
+        return
+
+
+class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
+
+
+def main():
+    server = ThreadedHTTPServer((LISTEN_HOST, LISTEN_PORT), RequestHandler)
+    log(f"Secure Forwarder listening on {LISTEN_HOST}:{LISTEN_PORT}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+        log("Secure Forwarder stopped.")
+
+
+if __name__ == "__main__":
+    main()
