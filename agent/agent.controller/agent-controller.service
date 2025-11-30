@@ -1,38 +1,76 @@
-[Unit]
-Description=Agent Controller (pull commands from control API)
-After=network-online.target secure-forwarder.service
-Wants=network-online.target
+@@ -5,72 +5,32 @@ Wants=network-online.target
 
 [Service]
 Type=simple
 User=root
 
+User=root                                 # otel-agent 재시작(systemctl) 위해 root 유지
+
+# 작업 디렉터리: lastagent 구조에 맞게 변경
 # 작업 디렉터리 (코드 기준 위치)
 WorkingDirectory=/home/last/lastagent/agent
 
+# ─────────────────────────────────────────────
 # 환경 변수 로딩
+#   /home/last/lastagent/etc/.env 에서 아래 값들을 읽어옴:
+#     CONTROLLER_URL
+#     AGENT_TOKEN
+#     AGENT_ID
+#     POLL_INTERVAL
+#     HMAC_SECRET
+# ─────────────────────────────────────────────
 EnvironmentFile=/home/last/lastagent/etc/.env
 
+# (로컬 디버깅용으로 직접 override 하고 싶을 때는 아래 예시처럼 추가 가능)
+#Environment="CONTROLLER_URL=http://127.0.0.1:8000"
+#Environment="AGENT_TOKEN=dev_ctrl_token"
+#Environment="AGENT_ID=agent-01"
+#Environment="POLL_INTERVAL=5"
+#Environment="HMAC_SECRET=super_secret_hmac_key"
+
+# venv 기반 파이썬으로 agent_controller 실행
+ExecStart=/home/last/lastagent/venv/bin/python /home/last/lastagent/agent/agent_controller.py
 # 실행 명령 (venv 기반 Python)
 ExecStart=/home/last/lastagent/venv/bin/python /home/last/lastagent/agent/agent-controller.py
 
 Restart=always
 RestartSec=5
 
+########## Hardening ##########
+
 NoNewPrivileges=true
+# 컨트롤러와 자식 프로세스가 추가 권한(setuid 등) 획득 금지.
+
 PrivateTmp=true
+# 다른 서비스와 tmp 공간 분리.
+
 RestrictSUIDSGID=true
+# setuid/gid 바이너리를 통한 권한 상승 차단.
+
 ProtectSystem=full
+# /usr, /etc, /boot 읽기 전용 (ReadWritePaths 로 푼 경로만 쓰기 가능).
+
+# ⚠ 이 서비스는 /home/last/lastagent/agent 에서 실행되므로
+#    ProtectHome=true 를 켜면 /home 접근이 막혀서 동작에 문제가 생길 수 있음.
+#    필요하면 나중에 전용 경로(/opt 등)로 옮기고 다시 켜는 것을 권장.
+#ProtectHome=true
+
 ProtectControlGroups=true
 ProtectKernelLogs=true
 ProtectKernelModules=true
 ProtectKernelTunables=true
+# 시스템 전역 설정/로그/모듈 변경 금지.
+
 RestrictNamespaces=true
 LockPersonality=true
+# 네임스페이스/ABI 악용 방지.
+
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# HTTP 통신만 필요하므로 다른 네트워크 패밀리 차단. (필요 시 수정)
+
+# otel-agent remote 설정 파일을 써야 하므로 허용
 ReadWritePaths=/etc/secure-log-agent/remote.d
+
+# systemd와 통신(systemctl reload/restart) 위해 런타임 영역 허용
 ReadWritePaths=/run
 ReadWritePaths=/var/run
-
-[Install]
-WantedBy=multi-user.target
